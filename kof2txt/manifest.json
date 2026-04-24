@@ -1,2 +1,7 @@
-"url": "https://testkof2txt.netlify.app/index.html",
-"icon": "https://testkof2txt.netlify.app/icon.png"
+{
+  "title": "KOF2TXT",
+  "icon": "https://testkof2txt.netlify.app/icon.png",
+  "url": "https://testkof2txt.netlify.app/index.html",
+  "description": "Convert KOF to TXT",
+  "enabled": true
+}
