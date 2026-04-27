@@ -20,7 +20,9 @@
     tokenWaiters: [],
     isEmbedded: false,
     lastResult: null,
-    busy: false
+    busy: false,
+    explorerApi: null,
+    explorerVisible: false
   };
 
   let ui = {};
@@ -47,6 +49,7 @@
     state.busy = busy;
     if (ui.refreshBtn) ui.refreshBtn.disabled = busy;
     if (ui.localUploadBtn) ui.localUploadBtn.disabled = busy;
+    if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = busy || !state.project;
     if (ui.convertSelectedBtn) ui.convertSelectedBtn.disabled = busy || !state.selectedFile;
     if (ui.convertAllBtn) ui.convertAllBtn.disabled = busy || !state.fileList.length;
   }
@@ -83,6 +86,14 @@
   function getTxtFilename(filename) {
     const name = String(filename || "output.kof").trim() || "output.kof";
     return /\.kof$/i.test(name) ? name.replace(/\.kof$/i, ".txt") : `${name}.txt`;
+  }
+
+  function getUploadTargetFile() {
+    return state.lastResult?.file || state.selectedFile || null;
+  }
+
+  function getUploadTargetFolderId() {
+    return getUploadTargetFile()?.parentId || null;
   }
 
   function resolveTokenWaiters(token) {
@@ -136,22 +147,44 @@
     const convertSelectedBtn = el("button", "primary", "Konverter valgt");
     const convertAllBtn = el("button", null, "Konverter alle");
     const localUploadBtn = el("button", null, "Last opp lokal fil");
+    const projectUploadBtn = el("button", null, "Test opplasting til prosjekt");
     const localFileInput = document.createElement("input");
     localFileInput.type = "file";
     localFileInput.accept = ".kof,text/plain";
     localFileInput.style.display = "none";
     convertSelectedBtn.disabled = true;
     convertAllBtn.disabled = true;
+    projectUploadBtn.disabled = true;
     btnRow.appendChild(refreshBtn);
     btnRow.appendChild(convertSelectedBtn);
     btnRow.appendChild(convertAllBtn);
     btnRow.appendChild(localUploadBtn);
+    btnRow.appendChild(projectUploadBtn);
     btnRow.appendChild(localFileInput);
     filesCard.appendChild(btnRow);
 
     const fileList = el("div", "file-list");
     fileList.id = "fileList";
     filesCard.appendChild(fileList);
+
+    const explorerCard = el("div", "card embed-card");
+    explorerCard.style.display = "none";
+    const explorerHeader = el("div", "card-header", [
+      el("div", null, [
+        el("div", "label", "Test: opplasting til prosjekt"),
+        el("div", "subtitle", "Embedded Trimble Connect File Explorer med opplasting aktivert")
+      ])
+    ]);
+    const closeExplorerBtn = el("button", null, "Lukk");
+    explorerHeader.appendChild(closeExplorerBtn);
+    explorerCard.appendChild(explorerHeader);
+    const explorerTarget = el("div", "embed-meta", "");
+    explorerCard.appendChild(explorerTarget);
+    const explorerFrame = document.createElement("iframe");
+    explorerFrame.className = "explorer-frame";
+    explorerFrame.title = "Trimble Connect File Explorer";
+    explorerFrame.hidden = true;
+    explorerCard.appendChild(explorerFrame);
 
     const statusCard = el("div", "card");
     const status = el("div", "status", "Starter...");
@@ -172,6 +205,7 @@
     app.appendChild(titleCard);
     app.appendChild(projectCard);
     app.appendChild(filesCard);
+    app.appendChild(explorerCard);
     app.appendChild(statusCard);
     app.appendChild(debugDetails);
 
@@ -182,8 +216,13 @@
       convertSelectedBtn,
       convertAllBtn,
       localUploadBtn,
+      projectUploadBtn,
       localFileInput,
       fileList,
+      explorerCard,
+      closeExplorerBtn,
+      explorerTarget,
+      explorerFrame,
       status,
       hint,
       debugOutput
@@ -204,6 +243,7 @@
   function renderFileList() {
     if (!ui.fileList) return;
     ui.fileList.innerHTML = "";
+    if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = state.busy || !state.project;
 
     ui.fileCount.textContent = state.fileList.length
       ? `${state.fileList.length} fil${state.fileList.length === 1 ? "" : "er"}`
@@ -326,6 +366,7 @@
                           project.location || "ukjent";
       ui.projectValue.innerHTML = `${escapeHtml(project.name || "-")} <span class="badge">${escapeHtml(regionLabel)}</span>`;
     }
+    setBusy(state.busy);
     return project;
   }
 
@@ -339,6 +380,102 @@
     if (!state.api) throw new Error("Ikke koblet til Workspace API.");
     if (!state.accessToken) await requestAccessToken();
     if (!state.project) await getProject();
+  }
+
+  function showExplorerPanel(show) {
+    state.explorerVisible = !!show;
+    if (!ui.explorerCard) return;
+    ui.explorerCard.style.display = show ? "block" : "none";
+    if (ui.explorerFrame) ui.explorerFrame.hidden = !show;
+  }
+
+  async function waitForFrameLoad(frame) {
+    if (!frame) throw new Error("Fant ikke explorer-iframe.");
+    if (frame.contentWindow && frame.dataset.loaded === "true") return;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Explorer iframe lastet ikke i tide.")), 30000);
+      frame.addEventListener("load", () => {
+        frame.dataset.loaded = "true";
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    });
+  }
+
+  async function ensureExplorerApi() {
+    if (state.explorerApi) return state.explorerApi;
+    if (!ui.explorerFrame) throw new Error("Explorer-iframe mangler i UI.");
+    if (!window.TrimbleConnectWorkspace?.getConnectEmbedUrl) {
+      throw new Error("getConnectEmbedUrl er ikke tilgjengelig.");
+    }
+
+    if (!ui.explorerFrame.src) {
+      ui.explorerFrame.src = TrimbleConnectWorkspace.getConnectEmbedUrl();
+    }
+
+    await waitForFrameLoad(ui.explorerFrame);
+
+    state.explorerApi = await TrimbleConnectWorkspace.connect(
+      ui.explorerFrame,
+      async (event) => {
+        if (event === "extension.sessionInvalid") {
+          const token = await requestAccessToken().catch(() => null);
+          if (token && state.explorerApi?.embed?.setTokens) {
+            state.explorerApi.embed.setTokens({ accessToken: token }).catch(() => {});
+          }
+        }
+      },
+      CONFIG.CONNECT_TIMEOUT_MS
+    );
+
+    return state.explorerApi;
+  }
+
+  async function openProjectUploadExplorer() {
+    try {
+      setBusy(true);
+      showHint(null, false);
+      await ensureReady();
+
+      const folderId = getUploadTargetFolderId();
+      const targetFile = getUploadTargetFile();
+      const explorerApi = await ensureExplorerApi();
+
+      await explorerApi.embed.setTokens({ accessToken: state.accessToken });
+      await explorerApi.embed.initFileExplorer({
+        projectId: state.project.id,
+        folderId: folderId || undefined,
+        enableUploadFiles: true,
+        enableAdd: true,
+        enableCreateFolder: false,
+        enableExplorerKebabMenu: false,
+        enableExplorerAllProjects: false,
+        enableSelect: true
+      });
+
+      if (ui.explorerTarget) {
+        const locationText = folderId
+          ? `Mappe for ${escapeHtml(targetFile?.name || "valgt fil")}`
+          : "Rotmappe i prosjektet";
+        ui.explorerTarget.innerHTML = `${locationText} <span class="badge">${escapeHtml(state.project.name || state.project.id)}</span>`;
+      }
+
+      showExplorerPanel(true);
+      setStatus("Explorer for prosjektopplasting er åpnet", "success");
+      setDebug({
+        action: "openProjectUploadExplorer",
+        projectId: state.project.id,
+        folderId: folderId || null,
+        targetFile
+      });
+    } catch (err) {
+      console.error(err);
+      showExplorerPanel(false);
+      setStatus(`Feil: ${err?.message || String(err)}`, "error");
+      setDebug({ error: err?.message || String(err), stack: err?.stack, action: "openProjectUploadExplorer" });
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function callProxy(action, payload) {
@@ -717,6 +854,8 @@
     ui.convertAllBtn.addEventListener("click", processAllFiles);
     ui.localUploadBtn.addEventListener("click", () => ui.localFileInput.click());
     ui.localFileInput.addEventListener("change", (event) => processLocalFile(event.target.files?.[0]));
+    ui.projectUploadBtn.addEventListener("click", openProjectUploadExplorer);
+    ui.closeExplorerBtn.addEventListener("click", () => showExplorerPanel(false));
   }
 
   async function init() {
@@ -737,6 +876,7 @@
         processSelectedFile,
         processAllFiles,
         processLocalFile,
+        openProjectUploadExplorer,
         inspectApi() {
           if (!state.api) return "Ikke koblet";
           const r = {};
