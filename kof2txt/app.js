@@ -22,7 +22,8 @@
     lastResult: null,
     busy: false,
     explorerApi: null,
-    explorerVisible: false
+    explorerVisible: false,
+    lastDownloadName: null
   };
 
   let ui = {};
@@ -49,7 +50,7 @@
     state.busy = busy;
     if (ui.refreshBtn) ui.refreshBtn.disabled = busy;
     if (ui.localUploadBtn) ui.localUploadBtn.disabled = busy;
-    if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = busy || !state.project;
+    if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = busy || !canOpenProjectUpload();
     if (ui.convertSelectedBtn) ui.convertSelectedBtn.disabled = busy || !state.selectedFile;
     if (ui.convertAllBtn) ui.convertAllBtn.disabled = busy || !state.fileList.length;
   }
@@ -94,6 +95,28 @@
 
   function getUploadTargetFolderId() {
     return getUploadTargetFile()?.parentId || null;
+  }
+
+  function canOpenProjectUpload() {
+    return !!(state.project && getUploadTargetFile());
+  }
+
+  function getUploadPanelSummary() {
+    const targetFile = getUploadTargetFile();
+    const folderId = getUploadTargetFolderId();
+    const projectName = state.project?.name || state.project?.id || "";
+    const sourceName = targetFile?.name || null;
+    const suggestedName = state.lastDownloadName || null;
+
+    return {
+      folderId,
+      projectName,
+      sourceName,
+      suggestedName,
+      locationText: folderId
+        ? `Samme mappe som ${sourceName || "valgt fil"}`
+        : "Prosjektets rotmappe"
+    };
   }
 
   function resolveTokenWaiters(token) {
@@ -147,7 +170,7 @@
     const convertSelectedBtn = el("button", "primary", "Konverter valgt");
     const convertAllBtn = el("button", null, "Konverter alle");
     const localUploadBtn = el("button", null, "Last opp lokal fil");
-    const projectUploadBtn = el("button", null, "Test opplasting til prosjekt");
+    const projectUploadBtn = el("button", null, "Last opp til prosjekt");
     const localFileInput = document.createElement("input");
     localFileInput.type = "file";
     localFileInput.accept = ".kof,text/plain";
@@ -171,8 +194,8 @@
     explorerCard.style.display = "none";
     const explorerHeader = el("div", "card-header", [
       el("div", null, [
-        el("div", "label", "Test: opplasting til prosjekt"),
-        el("div", "subtitle", "Embedded Trimble Connect File Explorer med opplasting aktivert")
+        el("div", "label", "Last opp til prosjekt"),
+        el("div", "subtitle", "Trimble Connects egen opplastingsvisning, åpnet i riktig prosjektmappe")
       ])
     ]);
     const closeExplorerBtn = el("button", null, "Lukk");
@@ -243,7 +266,7 @@
   function renderFileList() {
     if (!ui.fileList) return;
     ui.fileList.innerHTML = "";
-    if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = state.busy || !state.project;
+    if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = state.busy || !canOpenProjectUpload();
 
     ui.fileCount.textContent = state.fileList.length
       ? `${state.fileList.length} fil${state.fileList.length === 1 ? "" : "er"}`
@@ -440,11 +463,12 @@
       const folderId = getUploadTargetFolderId();
       const targetFile = getUploadTargetFile();
       const explorerApi = await ensureExplorerApi();
+      const summary = getUploadPanelSummary();
 
       await explorerApi.embed.setTokens({ accessToken: state.accessToken });
       await explorerApi.embed.initFileExplorer({
         projectId: state.project.id,
-        folderId: folderId || undefined,
+        folderId: summary.folderId || undefined,
         enableUploadFiles: true,
         enableAdd: true,
         enableCreateFolder: false,
@@ -454,14 +478,14 @@
       });
 
       if (ui.explorerTarget) {
-        const locationText = folderId
-          ? `Mappe for ${escapeHtml(targetFile?.name || "valgt fil")}`
-          : "Rotmappe i prosjektet";
-        ui.explorerTarget.innerHTML = `${locationText} <span class="badge">${escapeHtml(state.project.name || state.project.id)}</span>`;
+        const suggestedText = summary.suggestedName
+          ? `Last opp <strong>${escapeHtml(summary.suggestedName)}</strong> via <strong>Legg til</strong>.`
+          : `Bruk <strong>Legg til</strong> for å laste opp den konverterte TXT-filen.`;
+        ui.explorerTarget.innerHTML = `${escapeHtml(summary.locationText)} <span class="badge">${escapeHtml(summary.projectName)}</span><br>${suggestedText}`;
       }
 
       showExplorerPanel(true);
-      setStatus("Explorer for prosjektopplasting er åpnet", "success");
+      setStatus("Prosjektmappen for opplasting er åpnet", "success");
       setDebug({
         action: "openProjectUploadExplorer",
         projectId: state.project.id,
@@ -729,10 +753,11 @@
       setStatus(`Konverterer ${file.name}...`, "working");
       const converted = await downloadAndConvertFile(file);
       state.lastResult = converted.result;
+      state.lastDownloadName = converted.outName;
 
       triggerDownload(converted.outName, converted.txt);
       setStatus(`Ferdig: ${converted.outName} er lastet ned lokalt`, "success");
-      showHint(`Filen er lagret lokalt på maskinen din. Dra og slipp <strong>${escapeHtml(converted.outName)}</strong> tilbake inn i Trimble Connect-mappen for å laste den opp.`);
+      showHint(`Filen er lagret lokalt på maskinen din. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(converted.outName)}</strong>.`);
 
       setDebug({
         action: "processSelectedFile",
@@ -778,10 +803,15 @@
 
       const okCount = summary.filter((x) => x.ok).length;
       const failCount = summary.length - okCount;
+      state.lastDownloadName = okCount === 1 ? summary.find((x) => x.ok)?.outName || null : null;
 
       if (failCount === 0) {
         setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet ned`, "success");
-        showHint(`Alle filer er lagret lokalt. Dra og slipp dem tilbake inn i Trimble Connect-mappen for å laste dem opp.`);
+        showHint(
+          okCount === 1
+            ? `Filen er lagret lokalt. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(state.lastDownloadName || "den konverterte filen")}</strong>.`
+            : `Filene er lagret lokalt. Bruk <strong>Last opp til prosjekt</strong> for å åpne prosjektmappen og laste opp dem du vil sende tilbake.`
+        );
       } else {
         setStatus(`Fullført med ${failCount} feil (${okCount} OK, ${failCount} feilet)`, "error");
       }
@@ -808,6 +838,7 @@
       const kofText = await file.text();
       const txt = convertKofToTxt(kofText || "");
       const outName = getTxtFilename(file.name || "output.kof");
+      state.lastDownloadName = outName;
 
       triggerDownload(outName, txt);
       setStatus(`Ferdig: ${outName} er lastet ned lokalt`, "success");
