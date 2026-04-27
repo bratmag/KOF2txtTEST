@@ -272,10 +272,9 @@
       await state.api.ui.setMenu({
         title: CONFIG.APP_TITLE,
         icon: `${window.location.origin}/icon.png`,
-        command: CONFIG.MENU_MAIN_COMMAND,
-        subMenus: [{ title: "Konverter KOF", command: CONFIG.MENU_OPEN_COMMAND }]
+        command: CONFIG.MENU_MAIN_COMMAND
       });
-      await state.api.ui.setActiveMenuItem(CONFIG.MENU_OPEN_COMMAND).catch(() => {});
+      await state.api.ui.setActiveMenuItem(CONFIG.MENU_MAIN_COMMAND).catch(() => {});
       return true;
     } catch (err) {
       debug("setMenu feilet:", err);
@@ -705,7 +704,7 @@
     }
     if (event === "extension.command") {
       const command = args?.data || null;
-      if (command === CONFIG.MENU_OPEN_COMMAND) {
+      if (command === CONFIG.MENU_MAIN_COMMAND || command === CONFIG.MENU_OPEN_COMMAND) {
         setStatus(`${CONFIG.APP_TITLE} åpnet fra meny`, "neutral");
       }
       return;
