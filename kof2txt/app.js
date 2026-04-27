@@ -23,7 +23,8 @@
     busy: false,
     explorerApi: null,
     explorerVisible: false,
-    lastDownloadName: null
+    lastDownloadName: null,
+    lastAutoRefreshAt: 0
   };
 
   let ui = {};
@@ -137,7 +138,6 @@
     });
   }
 
-  // ─── UI Konstruksjon ────────────────────────────────────────────────────
   function buildUi() {
     const app = document.getElementById("app");
     if (!app) throw new Error("Fant ikke #app i index.html");
@@ -314,7 +314,6 @@
     ui.hint.innerHTML = `<span class="hint-icon">💡</span>${message}`;
   }
 
-  // ─── Workspace API ──────────────────────────────────────────────────────
   async function connectWorkspace() {
     setStatus("Kobler til Trimble Connect...");
     if (!window.TrimbleConnectWorkspace?.connect) {
@@ -516,7 +515,6 @@
     return { ok: res.ok, status: res.status, text, json };
   }
 
-  // ─── KOF-parser ─────────────────────────────────────────────────────────
   function convertKofToTxt(kofText) {
     const points = parseKofPoints(kofText);
     if (!points.length) {
@@ -584,23 +582,15 @@
   function tryParseFreePointLine(line) {
     const s = String(line || "").trim();
 
-    // KOF 05-variant: 05 Punktnavn Kode Nord Øst Høyde
-    // Eksempel: 05 p1 4051 6694974.582 297294.438 36.131
-    // Her ignorerer vi kodefeltet, fordi TXT-formatet bare skal ha punktnavn,nord,øst,høyde.
     let m = s.match(/^05\s+([^\s]+)\s+([^\s]+)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
     if (m) return { name: m[1], north: parseNumber(m[3]), east: parseNumber(m[4]), height: parseNumber(m[5]) };
 
-    // KOF 05-variant: 05 Punktnavn Nord Øst Høyde
-    // Eksempel: 05 11 6643083.229 592220.933 10.000
     m = s.match(/^05\s+([^\s]+)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
     if (m) return { name: m[1], north: parseNumber(m[2]), east: parseNumber(m[3]), height: parseNumber(m[4]) };
 
-    // KOF 05-variant: 05 Punktnavn Nord Øst, uten høyde
-    // Eksempel: 05 G1 6627190.530 620539.580
     m = s.match(/^05\s+([^\s]+)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
     if (m) return { name: m[1], north: parseNumber(m[2]), east: parseNumber(m[3]), height: null };
 
-    // Generisk variant uten 05: Punktnavn Nord Øst Høyde
     m = s.match(/^([^\s,;]+)[\s,;]+(-?\d+(?:[.,]\d+)?)[\s,;]+(-?\d+(?:[.,]\d+)?)[\s,;]+(-?\d+(?:[.,]\d+)?)\s*$/);
     if (m) return { name: m[1], north: parseNumber(m[2]), east: parseNumber(m[3]), height: parseNumber(m[4]) };
 
@@ -651,7 +641,7 @@
 
   function csvEscape(value) {
     const s = String(value ?? "");
-    if (/[",;\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    if (/[",;\n]/.test(s)) return `"${s.replace(/"/g, "\"\"")}"`;
     return s;
   }
 
@@ -663,7 +653,6 @@
   function isEastKey(key) { return ["e", "ost", "east", "easting", "x"].includes(key); }
   function isHeightKey(key) { return ["h", "z", "hoyde", "height", "elev", "elevation", "kote"].includes(key); }
 
-  // ─── Hovedfunksjoner ────────────────────────────────────────────────────
   async function refreshKofList() {
     try {
       setBusy(true);
@@ -718,6 +707,16 @@
     } finally {
       setBusy(false);
     }
+  }
+
+  async function refreshKofListOnOpen(reason = "open") {
+    const now = Date.now();
+    if (state.busy) return;
+    if (now - state.lastAutoRefreshAt < 1500) return;
+    state.lastAutoRefreshAt = now;
+
+    debug("Auto-refreshing KOF list", { reason });
+    await refreshKofList();
   }
 
   async function downloadAndConvertFile(file) {
@@ -781,7 +780,7 @@
       await ensureReady();
 
       if (!state.fileList.length) {
-        setStatus("Ingen filer i listen — trykk Oppdater liste først", "error");
+        setStatus("Ingen filer i listen - trykk Oppdater liste først", "error");
         return;
       }
 
@@ -826,7 +825,6 @@
     }
   }
 
-  // ─── Event Handlers ─────────────────────────────────────────────────────
   async function processLocalFile(file) {
     try {
       setBusy(true);
@@ -874,6 +872,7 @@
       const command = args?.data || null;
       if (command === CONFIG.MENU_MAIN_COMMAND || command === CONFIG.MENU_OPEN_COMMAND) {
         setStatus(`${CONFIG.APP_TITLE} åpnet fra meny`, "neutral");
+        refreshKofListOnOpen("menu").catch(() => {});
       }
       return;
     }
@@ -899,11 +898,15 @@
       await connectWorkspace();
       await ensureMenu();
 
-      setStatus("Klar — trykk \"Oppdater liste\" for å se KOF-filer", "neutral");
+      setStatus("Klar - laster liste automatisk...", "working");
+      setTimeout(() => {
+        refreshKofListOnOpen("init").catch(() => {});
+      }, 0);
 
       window.kof2txt = {
         state,
         refreshKofList,
+        refreshKofListOnOpen,
         processSelectedFile,
         processAllFiles,
         processLocalFile,
@@ -927,4 +930,3 @@
 
   window.addEventListener("load", init);
 })();
-
