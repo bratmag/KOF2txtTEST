@@ -1,6 +1,6 @@
 // netlify/functions/tc-proxy.js
 //
-// Proxy mellom KOF2TXT-extensionen og Trimble Connect API.
+// Proxy between the KOF2TXT extension and the Trimble Connect API.
 
 exports.handler = async function handler(event) {
   try {
@@ -14,6 +14,7 @@ exports.handler = async function handler(event) {
     if (action === "listProjectKofFiles") return await handleListProjectKofFiles(body);
     if (action === "downloadKofFile") return await handleDownloadKofFile(body);
     if (action === "probeCore") return await handleProbeCore(body);
+    if (action === "uploadConvertedTxt") return await handleUploadConvertedTxt(body);
 
     return jsonResponse(400, { ok: false, error: `Unknown action: ${String(action)}` });
   } catch (err) {
@@ -46,16 +47,16 @@ function safeHost(url) {
   try { return new URL(url).host; } catch { return null; }
 }
 
-let _regionCache = null;
+let regionCache = null;
 
 async function discoverRegions() {
-  if (_regionCache) return _regionCache;
+  if (regionCache) return regionCache;
 
   try {
     const res = await fetch("https://app.connect.trimble.com/tc/api/2.0/regions");
     if (res.ok) {
       const data = await res.json();
-      _regionCache = data;
+      regionCache = data;
       return data;
     }
   } catch (err) {
@@ -76,7 +77,6 @@ function getCoreBaseUrl(projectLocation) {
 
 async function getCoreBaseUrlAsync(projectLocation) {
   const loc = String(projectLocation || "").toLowerCase();
-
   const regions = await discoverRegions();
 
   if (regions && Array.isArray(regions)) {
@@ -86,10 +86,7 @@ async function getCoreBaseUrlAsync(projectLocation) {
     });
 
     if (match) {
-      // Viktig: Trimble sitt regions-API kan gi origin som //app21...
-      // men tc-api er komplett URL. Derfor prioriterer vi tc-api.
       const tcApi = match["tc-api"] || match.tcApi || match.tc_api;
-
       if (tcApi) {
         return String(tcApi).replace(/\/+$/, "");
       }
@@ -105,7 +102,6 @@ async function getCoreBaseUrlAsync(projectLocation) {
         const withProtocol = String(rawUrl).startsWith("//")
           ? `https:${rawUrl}`
           : String(rawUrl);
-
         const base = withProtocol.replace(/\/+$/, "");
         return base.endsWith("/tc/api/2.0") ? base : `${base}/tc/api/2.0`;
       }
@@ -149,6 +145,17 @@ async function fetchJsonWithBearer(url, token) {
   });
 }
 
+async function fetchWithBearer(url, token, options = {}, timeoutMs = 30000) {
+  return fetchRaw(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      ...(options.headers || {})
+    }
+  }, timeoutMs);
+}
+
 async function fetchTextNoAuth(url) {
   return fetchRaw(url, { method: "GET" }, 60000);
 }
@@ -182,7 +189,31 @@ function extractPossibleUrl(payload) {
   );
 }
 
-// ─── Metadata ────────────────────────────────────────────────────────────────
+function extractUploadInfo(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { uploadId: null, uploadUrl: null, completeUrl: null };
+  }
+
+  return {
+    uploadId:
+      payload.uploadId ||
+      payload.id ||
+      payload.data?.uploadId ||
+      payload.data?.id ||
+      payload.result?.uploadId ||
+      payload.result?.id ||
+      null,
+    uploadUrl: extractPossibleUrl(payload),
+    completeUrl:
+      payload.completeUrl ||
+      payload.completionUrl ||
+      payload.data?.completeUrl ||
+      payload.data?.completionUrl ||
+      payload.result?.completeUrl ||
+      payload.result?.completionUrl ||
+      null
+  };
+}
 
 async function getFileMetadata({ token, projectLocation, fileId }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
@@ -212,11 +243,8 @@ async function getFileVersions({ token, projectLocation, fileId }) {
   };
 }
 
-// ─── Download ────────────────────────────────────────────────────────────────
-
 async function tryCoreCandidates({ token, projectLocation, fileId, versionId }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
-
   const candidates = [
     {
       name: "fs-downloadurl",
@@ -319,7 +347,6 @@ async function handleDownloadKofFile(body) {
   }
 
   const metadata = await getFileMetadata({ token, projectLocation, fileId });
-
   if (!metadata.ok || !metadata.data) {
     return jsonResponse(200, {
       ok: false,
@@ -331,7 +358,6 @@ async function handleDownloadKofFile(body) {
   }
 
   const versions = await getFileVersions({ token, projectLocation, fileId });
-
   let versionId = metadata.data.versionId || metadata.data.id || fileId;
 
   if (versions.ok && Array.isArray(versions.data) && versions.data.length > 0) {
@@ -394,7 +420,6 @@ async function handleProbeCore(body) {
   const versions = await getFileVersions({ token, projectLocation, fileId });
 
   let versionId = metadata.data?.versionId || metadata.data?.id || fileId;
-
   if (versions.ok && Array.isArray(versions.data) && versions.data.length > 0) {
     versionId =
       versions.data[0]?.versionId ||
@@ -421,7 +446,245 @@ async function handleProbeCore(body) {
   });
 }
 
-// ─── List KOF-files ──────────────────────────────────────────────────────────
+async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics) {
+  const body = new Uint8Array(fileBuffer);
+  const methods = [
+    { method: "PUT", headers: { "Content-Type": "text/plain; charset=utf-8" } },
+    { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8" } }
+  ];
+
+  for (const candidate of methods) {
+    const res = await fetchRaw(uploadUrl, {
+      method: candidate.method,
+      headers: candidate.headers,
+      body
+    }, 120000);
+
+    diagnostics.push({
+      step: "signed-upload",
+      method: candidate.method,
+      status: res.status,
+      ok: res.ok,
+      host: safeHost(uploadUrl),
+      preview: shortText(res.text, 300)
+    });
+
+    if (res.ok) {
+      return { ok: true, method: candidate.method };
+    }
+  }
+
+  return { ok: false, error: "Ingen signed URL upload-metode fungerte." };
+}
+
+async function completeUpload({ token, projectLocation, uploadId, completeUrl, diagnostics }) {
+  const base = await getCoreBaseUrlAsync(projectLocation);
+  const urls = [];
+
+  if (completeUrl) urls.push(completeUrl);
+  if (uploadId) {
+    urls.push(`${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`);
+  }
+
+  for (const url of urls) {
+    const res = await fetchWithBearer(url, token, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({})
+    });
+
+    diagnostics.push({
+      step: "complete-upload",
+      url,
+      status: res.status,
+      ok: res.ok,
+      preview: shortText(res.text, 300)
+    });
+
+    if (res.ok) {
+      return { ok: true, response: res.json || res.text };
+    }
+  }
+
+  return { ok: false, error: "Kunne ikke fullføre opplastingen." };
+}
+
+async function tryDirectMultipartUpload({ token, projectLocation, parentId, fileName, fileBuffer }) {
+  const base = await getCoreBaseUrlAsync(projectLocation);
+  const endpoints = [
+    `${base}/files?parentId=${encodeURIComponent(parentId)}`,
+    `${base}/files?parentId=${encodeURIComponent(parentId)}&parentType=folder`
+  ];
+  const diagnostics = [];
+
+  for (const url of endpoints) {
+    const form = new FormData();
+    form.append("file", new Blob([fileBuffer], { type: "text/plain;charset=utf-8" }), fileName);
+
+    const res = await fetchWithBearer(url, token, {
+      method: "POST",
+      headers: {},
+      body: form
+    }, 120000);
+
+    diagnostics.push({
+      mode: "direct-multipart",
+      url,
+      status: res.status,
+      ok: res.ok,
+      preview: shortText(res.text, 300)
+    });
+
+    if (res.ok) {
+      return {
+        ok: true,
+        mode: "direct-multipart",
+        diagnostics,
+        response: res.json || res.text
+      };
+    }
+  }
+
+  return { ok: false, mode: "direct-multipart", diagnostics };
+}
+
+async function trySignedUploadFlow({ token, projectLocation, parentId, fileName, fileBuffer }) {
+  const base = await getCoreBaseUrlAsync(projectLocation);
+  const endpoints = [
+    `${base}/files/fs/upload?parentId=${encodeURIComponent(parentId)}&parentType=folder`
+  ];
+  const diagnostics = [];
+
+  for (const url of endpoints) {
+    const initRes = await fetchWithBearer(url, token, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ name: fileName })
+    });
+
+    diagnostics.push({
+      mode: "signed-init",
+      url,
+      status: initRes.status,
+      ok: initRes.ok,
+      preview: shortText(initRes.text, 300)
+    });
+
+    if (!initRes.ok || !initRes.json) continue;
+
+    const uploadInfo = extractUploadInfo(initRes.json);
+    if (!uploadInfo.uploadUrl) continue;
+
+    const uploadRes = await uploadToSignedUrl(uploadInfo.uploadUrl, fileBuffer, diagnostics);
+    if (!uploadRes.ok) continue;
+
+    if (!uploadInfo.uploadId && !uploadInfo.completeUrl) {
+      return {
+        ok: true,
+        mode: "signed-upload",
+        diagnostics,
+        response: initRes.json
+      };
+    }
+
+    const completeRes = await completeUpload({
+      token,
+      projectLocation,
+      uploadId: uploadInfo.uploadId,
+      completeUrl: uploadInfo.completeUrl,
+      diagnostics
+    });
+
+    if (completeRes.ok) {
+      return {
+        ok: true,
+        mode: "signed-upload",
+        diagnostics,
+        response: completeRes.response
+      };
+    }
+  }
+
+  return { ok: false, mode: "signed-upload", diagnostics };
+}
+
+async function handleUploadConvertedTxt(body) {
+  const { token, projectId, projectLocation, parentId, fileName, text } = body;
+
+  if (!token || !projectId || !parentId || !fileName || typeof text !== "string") {
+    return jsonResponse(400, { ok: false, error: "Mangler token, projectId, parentId, fileName eller text" });
+  }
+
+  const fileBuffer = Buffer.from(text, "utf8");
+  const attempts = [];
+
+  const direct = await tryDirectMultipartUpload({
+    token,
+    projectLocation,
+    parentId,
+    fileName,
+    fileBuffer
+  });
+  attempts.push(direct);
+
+  if (direct.ok) {
+    return jsonResponse(200, {
+      ok: true,
+      action: "uploadConvertedTxt",
+      project: { id: projectId, location: projectLocation },
+      upload: {
+        mode: direct.mode,
+        parentId,
+        fileName,
+        size: fileBuffer.length
+      },
+      response: direct.response,
+      diagnostics: direct.diagnostics
+    });
+  }
+
+  const signed = await trySignedUploadFlow({
+    token,
+    projectLocation,
+    parentId,
+    fileName,
+    fileBuffer
+  });
+  attempts.push(signed);
+
+  if (signed.ok) {
+    return jsonResponse(200, {
+      ok: true,
+      action: "uploadConvertedTxt",
+      project: { id: projectId, location: projectLocation },
+      upload: {
+        mode: signed.mode,
+        parentId,
+        fileName,
+        size: fileBuffer.length
+      },
+      response: signed.response,
+      diagnostics: signed.diagnostics
+    });
+  }
+
+  return jsonResponse(200, {
+    ok: false,
+    action: "uploadConvertedTxt",
+    error: "Kunne ikke laste opp TXT-filen automatisk.",
+    project: { id: projectId, location: projectLocation },
+    upload: {
+      parentId,
+      fileName,
+      size: fileBuffer.length
+    },
+    attempts
+  });
+}
 
 async function handleListProjectKofFiles(body) {
   const { token, projectId, projectLocation } = body;
@@ -442,7 +705,6 @@ async function handleListProjectKofFiles(body) {
 async function tryListProjectFilesCandidates({ token, projectId, projectLocation }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
   const regions = await discoverRegions();
-
   const candidates = [
     {
       name: "search-kof",
@@ -522,7 +784,6 @@ function isKofName(name) {
 
 function normalizePathValue(pathValue) {
   if (!pathValue) return "";
-
   if (typeof pathValue === "string") return pathValue;
 
   if (Array.isArray(pathValue)) {
@@ -613,7 +874,6 @@ function walkAny(node, pathParts, out, seen) {
     };
 
     const key = `${normalized.id}|${normalized.name}|${normalized.path}`;
-
     if (!seen.has(key)) {
       seen.add(key);
       out.push(normalized);
@@ -645,4 +905,3 @@ function buildPath(parts) {
 
   return p.length ? p.join("/") : "";
 }
-

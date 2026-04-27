@@ -24,7 +24,8 @@
     explorerApi: null,
     explorerVisible: false,
     lastDownloadName: null,
-    lastAutoRefreshAt: 0
+    lastAutoRefreshAt: 0,
+    lastUploadResult: null
   };
 
   let ui = {};
@@ -155,7 +156,6 @@
     projectCard.appendChild(projectValue);
 
     const filesCard = el("div", "card");
-
     const filesHeader = el("div", "card-header", [
       el("div", null, [
         el("div", "label", "KOF-filer")
@@ -515,6 +515,37 @@
     return { ok: res.ok, status: res.status, text, json };
   }
 
+  async function uploadConvertedTxtToProject({ sourceFile, outName, txt }) {
+    const parentId = sourceFile?.parentId || null;
+    if (!parentId) {
+      return {
+        ok: false,
+        skipped: true,
+        error: "Fant ikke prosjektmappe for automatisk opplasting."
+      };
+    }
+
+    const proxyRes = await callProxy("uploadConvertedTxt", {
+      token: state.accessToken,
+      projectId: state.project.id,
+      projectLocation: state.project.location,
+      parentId,
+      fileName: outName,
+      text: txt
+    });
+
+    if (!proxyRes.ok || !proxyRes.json) {
+      return {
+        ok: false,
+        error: `Proxy svarte med HTTP ${proxyRes.status}`,
+        httpStatus: proxyRes.status,
+        preview: shortText(proxyRes.text, 400)
+      };
+    }
+
+    return proxyRes.json;
+  }
+
   function convertKofToTxt(kofText) {
     const points = parseKofPoints(kofText);
     if (!points.length) {
@@ -598,6 +629,7 @@
   }
 
   function isCompletePoint(p) { return !!p && p.name && p.north != null && p.east != null; }
+
   function normalizePoint(p) {
     return {
       name: String(p.name || "").trim(),
@@ -754,14 +786,28 @@
       state.lastResult = converted.result;
       state.lastDownloadName = converted.outName;
 
+      const uploadResult = await uploadConvertedTxtToProject({
+        sourceFile: converted.result.file,
+        outName: converted.outName,
+        txt: converted.txt
+      });
+      state.lastUploadResult = uploadResult;
+
       triggerDownload(converted.outName, converted.txt);
-      setStatus(`Ferdig: ${converted.outName} er lastet ned lokalt`, "success");
-      showHint(`Filen er lagret lokalt på maskinen din. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(converted.outName)}</strong>.`);
+
+      if (uploadResult.ok) {
+        setStatus(`Ferdig: ${converted.outName} er lastet ned og lastet opp til prosjektet`, "success");
+        showHint("Filen er lagret lokalt og automatisk lastet opp tilbake til samme prosjektmappe i Trimble Connect.");
+      } else {
+        setStatus(`Ferdig: ${converted.outName} er lastet ned lokalt`, "success");
+        showHint(`Automatisk opplasting kom ikke helt i mål. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(converted.outName)}</strong>.`);
+      }
 
       setDebug({
         action: "processSelectedFile",
         sourceFile: converted.result.file,
         convertedFile: { name: converted.outName, size: converted.txt.length },
+        uploadResult,
         preview: shortText(converted.result.text || "", 300)
       });
     } catch (err) {
@@ -793,8 +839,20 @@
 
         try {
           const converted = await downloadAndConvertFile(file);
+          const uploadResult = await uploadConvertedTxtToProject({
+            sourceFile: converted.result.file,
+            outName: converted.outName,
+            txt: converted.txt
+          });
+
           triggerDownload(converted.outName, converted.txt);
-          summary.push({ ok: true, file: file.name, outName: converted.outName });
+          summary.push({
+            ok: true,
+            file: file.name,
+            outName: converted.outName,
+            uploadOk: !!uploadResult.ok,
+            uploadResult
+          });
         } catch (err) {
           summary.push({ ok: false, file: file.name, error: err?.message || String(err) });
         }
@@ -802,20 +860,34 @@
 
       const okCount = summary.filter((x) => x.ok).length;
       const failCount = summary.length - okCount;
+      const uploadOkCount = summary.filter((x) => x.ok && x.uploadOk).length;
       state.lastDownloadName = okCount === 1 ? summary.find((x) => x.ok)?.outName || null : null;
+      state.lastUploadResult = okCount === 1 ? summary.find((x) => x.ok)?.uploadResult || null : null;
 
       if (failCount === 0) {
-        setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet ned`, "success");
-        showHint(
-          okCount === 1
-            ? `Filen er lagret lokalt. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(state.lastDownloadName || "den konverterte filen")}</strong>.`
-            : `Filene er lagret lokalt. Bruk <strong>Last opp til prosjekt</strong> for å åpne prosjektmappen og laste opp dem du vil sende tilbake.`
-        );
+        if (uploadOkCount === okCount) {
+          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert, lastet ned og lastet opp`, "success");
+          showHint("Alle konverterte filer ble også forsøkt lastet opp automatisk til samme prosjektmapper i Trimble Connect.");
+        } else {
+          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet ned`, "success");
+          showHint(
+            okCount === 1
+              ? `Automatisk opplasting kom ikke helt i mål. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(state.lastDownloadName || "den konverterte filen")}</strong>.`
+              : "Noen automatiske opplastinger kom ikke helt i mål. Bruk <strong>Last opp til prosjekt</strong> for å åpne prosjektmappen og laste opp dem som mangler."
+          );
+        }
       } else {
         setStatus(`Fullført med ${failCount} feil (${okCount} OK, ${failCount} feilet)`, "error");
       }
 
-      setDebug({ action: "convertAll", total: summary.length, okCount, failCount, files: summary });
+      setDebug({
+        action: "convertAll",
+        total: summary.length,
+        okCount,
+        failCount,
+        uploadOkCount,
+        files: summary
+      });
     } catch (err) {
       console.error(err);
       setStatus(`Feil: ${err?.message || String(err)}`, "error");
@@ -837,6 +909,7 @@
       const txt = convertKofToTxt(kofText || "");
       const outName = getTxtFilename(file.name || "output.kof");
       state.lastDownloadName = outName;
+      state.lastUploadResult = null;
 
       triggerDownload(outName, txt);
       setStatus(`Ferdig: ${outName} er lastet ned lokalt`, "success");
@@ -911,6 +984,7 @@
         processAllFiles,
         processLocalFile,
         openProjectUploadExplorer,
+        uploadConvertedTxtToProject,
         inspectApi() {
           if (!state.api) return "Ikke koblet";
           const r = {};
