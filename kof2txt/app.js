@@ -6,8 +6,9 @@
     CONNECT_TIMEOUT_MS: 30000,
     TOKEN_WAIT_MS: 30000,
     PROXY_URL: "/.netlify/functions/tc-proxy",
-    MENU_MAIN_COMMAND: "KOF2TXT_MAIN",
-    MENU_OPEN_COMMAND: "KOF2TXT_OPEN"
+    APP_TITLE: "KOF2TXT-TEST",
+    MENU_MAIN_COMMAND: "KOF2TXT_TEST_MAIN",
+    MENU_OPEN_COMMAND: "KOF2TXT_TEST_OPEN"
   };
 
   const state = {
@@ -45,6 +46,7 @@
   function setBusy(busy) {
     state.busy = busy;
     if (ui.refreshBtn) ui.refreshBtn.disabled = busy;
+    if (ui.localUploadBtn) ui.localUploadBtn.disabled = busy;
     if (ui.convertSelectedBtn) ui.convertSelectedBtn.disabled = busy || !state.selectedFile;
     if (ui.convertAllBtn) ui.convertAllBtn.disabled = busy || !state.fileList.length;
   }
@@ -78,6 +80,11 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  function getTxtFilename(filename) {
+    const name = String(filename || "output.kof").trim() || "output.kof";
+    return /\.kof$/i.test(name) ? name.replace(/\.kof$/i, ".txt") : `${name}.txt`;
+  }
+
   function resolveTokenWaiters(token) {
     const waiters = [...state.tokenWaiters];
     state.tokenWaiters = [];
@@ -104,7 +111,7 @@
 
     const titleCard = el("div", "card");
     titleCard.appendChild(el("div", "card-header", [
-      el("h2", null, "KOF2TXT")
+      el("h2", null, CONFIG.APP_TITLE)
     ]));
     titleCard.appendChild(el("div", "subtitle", "Konverter .kof-filer til tekstformat"));
 
@@ -128,11 +135,18 @@
     const refreshBtn = el("button", null, "Oppdater liste");
     const convertSelectedBtn = el("button", "primary", "Konverter valgt");
     const convertAllBtn = el("button", null, "Konverter alle");
+    const localUploadBtn = el("button", null, "Last opp lokal fil");
+    const localFileInput = document.createElement("input");
+    localFileInput.type = "file";
+    localFileInput.accept = ".kof,text/plain";
+    localFileInput.style.display = "none";
     convertSelectedBtn.disabled = true;
     convertAllBtn.disabled = true;
     btnRow.appendChild(refreshBtn);
     btnRow.appendChild(convertSelectedBtn);
     btnRow.appendChild(convertAllBtn);
+    btnRow.appendChild(localUploadBtn);
+    btnRow.appendChild(localFileInput);
     filesCard.appendChild(btnRow);
 
     const fileList = el("div", "file-list");
@@ -167,6 +181,8 @@
       refreshBtn,
       convertSelectedBtn,
       convertAllBtn,
+      localUploadBtn,
+      localFileInput,
       fileList,
       status,
       hint,
@@ -254,7 +270,7 @@
     if (!state.api?.ui?.setMenu) return false;
     try {
       await state.api.ui.setMenu({
-        title: "KOF2TXT",
+        title: CONFIG.APP_TITLE,
         icon: `${window.location.origin}/icon.png`,
         command: CONFIG.MENU_MAIN_COMMAND,
         subMenus: [{ title: "Konverter KOF", command: CONFIG.MENU_OPEN_COMMAND }]
@@ -558,7 +574,7 @@
     if (!result.ok) throw new Error(result.error || result.step || "Kunne ikke laste ned KOF-fil");
 
     const txt = convertKofToTxt(result.text || "");
-    const outName = String(result.file?.name || file.name || "output.kof").replace(/\.kof$/i, ".txt");
+    const outName = getTxtFilename(result.file?.name || file.name || "output.kof");
     return { outName, txt, result };
   }
 
@@ -645,6 +661,38 @@
   }
 
   // ─── Event Handlers ─────────────────────────────────────────────────────
+  async function processLocalFile(file) {
+    try {
+      setBusy(true);
+      showHint(null, false);
+
+      if (!file) return;
+
+      setStatus(`Konverterer lokal fil ${file.name}...`, "working");
+      const kofText = await file.text();
+      const txt = convertKofToTxt(kofText || "");
+      const outName = getTxtFilename(file.name || "output.kof");
+
+      triggerDownload(outName, txt);
+      setStatus(`Ferdig: ${outName} er lastet ned lokalt`, "success");
+      showHint(`Lokal fil er konvertert direkte fra maskinen din. Resultatet <strong>${escapeHtml(outName)}</strong> er lastet ned lokalt.`);
+
+      setDebug({
+        action: "processLocalFile",
+        sourceFile: { name: file.name, size: file.size, type: file.type },
+        convertedFile: { name: outName, size: txt.length },
+        preview: shortText(kofText || "", 300)
+      });
+    } catch (err) {
+      console.error(err);
+      setStatus(`Feil: ${err?.message || String(err)}`, "error");
+      setDebug({ error: err?.message || String(err), stack: err?.stack });
+    } finally {
+      if (ui.localFileInput) ui.localFileInput.value = "";
+      setBusy(false);
+    }
+  }
+
   function onWorkspaceEvent(event, args) {
     debug("[TC EVENT]", event, args);
     if (event === "extension.accessToken") {
@@ -658,7 +706,7 @@
     if (event === "extension.command") {
       const command = args?.data || null;
       if (command === CONFIG.MENU_OPEN_COMMAND) {
-        setStatus("KOF2TXT åpnet fra meny", "neutral");
+        setStatus(`${CONFIG.APP_TITLE} åpnet fra meny`, "neutral");
       }
       return;
     }
@@ -668,6 +716,8 @@
     ui.refreshBtn.addEventListener("click", refreshKofList);
     ui.convertSelectedBtn.addEventListener("click", processSelectedFile);
     ui.convertAllBtn.addEventListener("click", processAllFiles);
+    ui.localUploadBtn.addEventListener("click", () => ui.localFileInput.click());
+    ui.localFileInput.addEventListener("change", (event) => processLocalFile(event.target.files?.[0]));
   }
 
   async function init() {
@@ -687,6 +737,7 @@
         refreshKofList,
         processSelectedFile,
         processAllFiles,
+        processLocalFile,
         inspectApi() {
           if (!state.api) return "Ikke koblet";
           const r = {};
