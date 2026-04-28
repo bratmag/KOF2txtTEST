@@ -945,10 +945,34 @@ async function handleListProjectKofFiles(body) {
 async function tryListProjectFilesCandidates({ token, projectId, projectLocation }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
   const regions = await discoverRegions();
+  const searchProbe = await fetchJsonWithBearer(
+    `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.kof&type=file`,
+    token
+  );
+  const searchFiles = searchProbe.ok && searchProbe.json
+    ? normalizeFilesFromAnyResponse(searchProbe.json).filter((f) => f && f.id && isKofName(f.name))
+    : [];
+  const seedFolderIds = Array.from(new Set(
+    searchFiles
+      .map((f) => f.parentId || null)
+      .filter(Boolean)
+  ));
+
   const folderTree = await tryFolderTreeListing({
     token,
     projectId,
-    projectLocation
+    projectLocation,
+    seedFolderIds,
+    initialDiagnostics: [
+      {
+        name: "search-kof-seed",
+        url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.kof&type=file`,
+        ok: searchProbe.ok,
+        status: searchProbe.status,
+        preview: shortText(searchProbe.text, 400),
+        seedFolderIds
+      }
+    ]
   });
 
   if (folderTree.ok && Array.isArray(folderTree.files) && folderTree.files.length) {
@@ -1061,13 +1085,25 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
   };
 }
 
-async function tryFolderTreeListing({ token, projectId, projectLocation }) {
+async function tryFolderTreeListing({ token, projectId, projectLocation, seedFolderIds = [], initialDiagnostics = [] }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
-  const diagnostics = [];
+  const diagnostics = Array.isArray(initialDiagnostics) ? [...initialDiagnostics] : [];
   const filesByKey = new Map();
-  const folderQueue = [{ id: projectId, pathParts: [] }];
+  const folderQueue = seedFolderIds.map((id) => ({ id, pathParts: [] }));
   const visitedFolders = new Set();
   const sources = [];
+
+  if (!folderQueue.length) {
+    return {
+      ok: false,
+      source: "folder-tree",
+      candidatesTried: diagnostics.length,
+      files: [],
+      diagnostics,
+      sources,
+      error: "Fant ingen seed-folderId-er fra eksisterende søkeresultater."
+    };
+  }
 
   while (folderQueue.length) {
     const current = folderQueue.shift();
