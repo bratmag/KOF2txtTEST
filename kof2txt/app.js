@@ -810,14 +810,19 @@
   }
 
   function dedupeLandXmlPointNames(points) {
-    const counts = {};
+    const totals = {};
+    for (const point of points) {
+      const base = point.rawName || "Point";
+      totals[base] = (totals[base] || 0) + 1;
+    }
+
+    const seen = {};
     return points.map((point) => {
       const base = point.rawName || "Point";
-      const next = counts[base] || 0;
-      counts[base] = next + 1;
+      seen[base] = (seen[base] || 0) + 1;
       return {
         ...point,
-        name: next === 0 ? base : `${base}_${next}`
+        name: totals[base] === 1 ? base : `${base}_${seen[base]}`
       };
     });
   }
@@ -857,38 +862,31 @@
   }
 
   function buildLandXmlCoordGeom(points) {
-    if (points.length === 2) {
-      return [
-        `        <Line length="${formatLandXmlNumber(distance2d(points[0], points[1]))}" staStart="0.00000">`,
-        `          <Start>${formatLandXmlNumber(points[0].n)} ${formatLandXmlNumber(points[0].e)} ${formatLandXmlNumber(points[0].h)}</Start>`,
-        `          <End>${formatLandXmlNumber(points[1].n)} ${formatLandXmlNumber(points[1].e)} ${formatLandXmlNumber(points[1].h)}</End>`,
+    const segments = [];
+    let station = 0;
+
+    for (let index = 1; index < points.length; index += 1) {
+      const start = points[index - 1];
+      const end = points[index];
+      const length = distance2d(start, end);
+
+      segments.push([
+        `        <Line length="${formatLandXmlNumber(length)}" staStart="${formatLandXmlNumber(station)}">`,
+        `          <Start>${formatLandXmlNumber(start.n)} ${formatLandXmlNumber(start.e)} ${formatLandXmlNumber(start.h)}</Start>`,
+        `          <End>${formatLandXmlNumber(end.n)} ${formatLandXmlNumber(end.e)} ${formatLandXmlNumber(end.h)}</End>`,
         "        </Line>"
-      ].join("\n");
+      ].join("\n"));
+
+      station += length;
     }
 
-    const pointList = points.map((point) => (
-      `${formatLandXmlNumber(point.n)} ${formatLandXmlNumber(point.e)} ${formatLandXmlNumber(point.h)}`
-    )).join(" ");
-
-    return [
-      `        <IrregularLine length="${formatLandXmlNumber(totalDistance2d(points))}" staStart="0.00000">`,
-      `          <PntList3D>${pointList}</PntList3D>`,
-      "        </IrregularLine>"
-    ].join("\n");
+    return segments.join("\n");
   }
 
   function distance2d(a, b) {
     const dn = (b?.n || 0) - (a?.n || 0);
     const de = (b?.e || 0) - (a?.e || 0);
     return Math.sqrt((dn * dn) + (de * de));
-  }
-
-  function totalDistance2d(points) {
-    let total = 0;
-    for (let i = 1; i < points.length; i += 1) {
-      total += distance2d(points[i - 1], points[i]);
-    }
-    return total;
   }
 
   function formatLandXmlNumber(value, decimals = 5) {
