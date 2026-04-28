@@ -726,20 +726,23 @@
         setStatus(`Fant ${state.fileList.length} KOF-fil${state.fileList.length === 1 ? "" : "er"}`, "success");
       }
 
-      setDebug({
+      const debugPayload = {
         action: "listProjectKofFiles",
         fileCount: state.fileList.length,
         candidatesTried: result.candidatesTried,
         source: result.source,
         sources: result.sources || null,
-        diagnostics: result.diagnostics || null,
         files: state.fileList.map((f) => ({
-          id: f.id,
           name: f.name,
-          parentId: f.parentId || null,
           path: f.path || ""
         }))
-      });
+      };
+
+      if (result.source !== "folder-tree" || state.fileList.length === 0) {
+        debugPayload.diagnostics = result.diagnostics || null;
+      }
+
+      setDebug(debugPayload);
     } catch (err) {
       console.error(err);
       setStatus(`Feil: ${err?.message || String(err)}`, "error");
