@@ -513,25 +513,36 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, d
 
 async function tryDirectMultipartUpload({ token, projectLocation, parentId, fileName, fileBuffer }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
-  const endpoints = [
-    `${base}/files?parentId=${encodeURIComponent(parentId)}`,
-    `${base}/files?parentId=${encodeURIComponent(parentId)}&parentType=folder`
+  const uploadTargets = [
+    { url: `${base}/files?parentId=${encodeURIComponent(parentId)}`, mode: "form-data-file" },
+    { url: `${base}/files?parentId=${encodeURIComponent(parentId)}&name=${encodeURIComponent(fileName)}`, mode: "octet-stream-name-query", contentType: "application/octet-stream" },
+    { url: `${base}/files?parentId=${encodeURIComponent(parentId)}&fileName=${encodeURIComponent(fileName)}`, mode: "octet-stream-filename-query", contentType: "application/octet-stream" }
   ];
   const diagnostics = [];
 
-  for (const url of endpoints) {
-    const form = new FormData();
-    form.append("file", new Blob([fileBuffer], { type: "text/plain;charset=utf-8" }), fileName);
+  for (const target of uploadTargets) {
+    let body;
+    let headers = {};
 
-    const res = await fetchWithBearer(url, token, {
+    if (target.mode === "form-data-file") {
+      const form = new FormData();
+      form.append("file", new Blob([fileBuffer], { type: "text/plain;charset=utf-8" }), fileName);
+      body = form;
+    } else {
+      body = new Uint8Array(fileBuffer);
+      headers = { "Content-Type": target.contentType };
+    }
+
+    const res = await fetchWithBearer(target.url, token, {
       method: "POST",
-      headers: {},
-      body: form
+      headers,
+      body
     }, 120000);
 
     diagnostics.push({
       mode: "direct-multipart",
-      url,
+      variant: target.mode,
+      url: target.url,
       status: res.status,
       ok: res.ok,
       preview: shortText(res.text, 300)
@@ -553,22 +564,52 @@ async function tryDirectMultipartUpload({ token, projectLocation, parentId, file
 async function trySignedUploadFlow({ token, projectLocation, parentId, fileName, fileBuffer }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
   const endpoints = [
-    `${base}/files/fs/upload?parentId=${encodeURIComponent(parentId)}&parentType=folder`
+    {
+      label: "parentId-only",
+      url: `${base}/files/fs/upload?parentId=${encodeURIComponent(parentId)}`,
+      body: { name: fileName }
+    },
+    {
+      label: "parentType-folder-lower",
+      url: `${base}/files/fs/upload?parentId=${encodeURIComponent(parentId)}&parentType=folder`,
+      body: { name: fileName }
+    },
+    {
+      label: "parentType-folder-upper",
+      url: `${base}/files/fs/upload?parentId=${encodeURIComponent(parentId)}&parentType=FOLDER`,
+      body: { name: fileName }
+    },
+    {
+      label: "parentType-projectfile",
+      url: `${base}/files/fs/upload?parentId=${encodeURIComponent(parentId)}&parentType=PROJECT_FILE`,
+      body: { name: fileName }
+    },
+    {
+      label: "folderId-only",
+      url: `${base}/files/fs/upload?folderId=${encodeURIComponent(parentId)}`,
+      body: { name: fileName }
+    },
+    {
+      label: "json-parent-body",
+      url: `${base}/files/fs/upload`,
+      body: { name: fileName, parentId, parentType: "FOLDER" }
+    }
   ];
   const diagnostics = [];
 
-  for (const url of endpoints) {
-    const initRes = await fetchWithBearer(url, token, {
+  for (const endpoint of endpoints) {
+    const initRes = await fetchWithBearer(endpoint.url, token, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ name: fileName })
+      body: JSON.stringify(endpoint.body)
     });
 
     diagnostics.push({
       mode: "signed-init",
-      url,
+      variant: endpoint.label,
+      url: endpoint.url,
       status: initRes.status,
       ok: initRes.ok,
       preview: shortText(initRes.text, 300)
