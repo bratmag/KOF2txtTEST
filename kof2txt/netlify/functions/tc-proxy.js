@@ -947,20 +947,22 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
   const regions = await discoverRegions();
   const candidates = [
     {
-      name: "search-kof",
-      url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.kof&type=file`
+      name: "projects-files-recursive",
+      url: `${base}/projects/${encodeURIComponent(projectId)}/files?recursive=true`
     },
     {
       name: "projects-files",
       url: `${base}/projects/${encodeURIComponent(projectId)}/files`
     },
     {
-      name: "projects-files-recursive",
-      url: `${base}/projects/${encodeURIComponent(projectId)}/files?recursive=true`
+      name: "search-kof",
+      url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.kof&type=file`
     }
   ];
 
   const diagnostics = [];
+  const filesByKey = new Map();
+  const successSources = [];
 
   for (const candidate of candidates) {
     try {
@@ -985,16 +987,17 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
         );
 
       if (files.length) {
-        return {
-          ok: true,
-          action: "listProjectKofFiles",
-          project: { id: projectId, location: projectLocation },
-          resolvedBaseUrl: base,
-          source: candidate.name,
-          candidatesTried: diagnostics.length,
-          files,
-          diagnostics
-        };
+        successSources.push({
+          name: candidate.name,
+          fileCount: files.length
+        });
+
+        for (const file of files) {
+          const key = `${file.id}|${file.parentId || ""}|${file.name}`;
+          if (!filesByKey.has(key)) {
+            filesByKey.set(key, file);
+          }
+        }
       }
     } catch (err) {
       diagnostics.push({
@@ -1004,6 +1007,26 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
         error: err?.message || String(err)
       });
     }
+  }
+
+  const files = Array.from(filesByKey.values()).sort((a, b) =>
+    String(a.name).localeCompare(String(b.name), undefined, {
+      sensitivity: "base"
+    })
+  );
+
+  if (files.length) {
+    return {
+      ok: true,
+      action: "listProjectKofFiles",
+      project: { id: projectId, location: projectLocation },
+      resolvedBaseUrl: base,
+      source: successSources.map((x) => x.name).join("+"),
+      candidatesTried: diagnostics.length,
+      files,
+      diagnostics,
+      sources: successSources
+    };
   }
 
   return {
