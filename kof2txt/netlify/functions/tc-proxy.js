@@ -51,6 +51,13 @@ function md5Base64(buffer) {
   return require("crypto").createHash("md5").update(buffer).digest("base64");
 }
 
+function isUploadAlreadyCompleted(res) {
+  const text = String(res?.text || "");
+  const details = String(res?.json?.details || res?.json?.message || "");
+  return /file upload already completed/i.test(text) ||
+    /file upload already completed/i.test(details);
+}
+
 let regionCache = null;
 
 async function discoverRegions() {
@@ -574,6 +581,16 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, u
   }
   if (uploadId) {
     const completePath = `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`;
+
+    for (const bodyCandidate of buildCompleteBodies({ uploadId, uploadInfo, fileBuffer, digest, digestHeader })) {
+      candidates.push({
+        label: `complete-path-${bodyCandidate.label}`,
+        url: completePath,
+        headers: { "Content-Type": "application/json", Digest: digestHeader },
+        body: bodyCandidate.body
+      });
+    }
+
     candidates.push({
       label: "complete-path-json-content-type-no-body",
       url: completePath,
@@ -641,15 +658,6 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, u
       body: { uploadId }
     });
 
-    for (const bodyCandidate of buildCompleteBodies({ uploadId, uploadInfo, fileBuffer, digest, digestHeader })) {
-      candidates.push({
-        label: `complete-path-${bodyCandidate.label}`,
-        url: completePath,
-        headers: { "Content-Type": "application/json", Digest: digestHeader },
-        body: bodyCandidate.body
-      });
-    }
-
     candidates.push({
       label: "upload-complete-query",
       url: `${base}/files/fs/upload/complete?uploadId=${encodeURIComponent(uploadId)}`,
@@ -683,6 +691,14 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, u
 
     if (res.ok) {
       return { ok: true, response: res.json || res.text };
+    }
+
+    if (isUploadAlreadyCompleted(res)) {
+      return {
+        ok: true,
+        alreadyCompleted: true,
+        response: res.json || res.text
+      };
     }
   }
 
