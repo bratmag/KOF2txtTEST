@@ -804,12 +804,11 @@
       });
       state.lastUploadResult = uploadResult;
 
-      triggerDownload(converted.outName, converted.txt);
-
       if (uploadResult.ok) {
-        setStatus(`Ferdig: ${converted.outName} er lastet ned og lastet opp til prosjektet`, "success");
-        showHint("Filen er lagret lokalt og automatisk lastet opp tilbake til samme prosjektmappe i Trimble Connect.");
+        setStatus(`Ferdig: ${converted.outName} er lastet opp til prosjektet`, "success");
+        showHint("Den konverterte filen ble automatisk lastet opp tilbake til samme prosjektmappe i Trimble Connect.");
       } else {
+        triggerDownload(converted.outName, converted.txt);
         setStatus(`Ferdig: ${converted.outName} er lastet ned lokalt`, "success");
         showHint(`Automatisk opplasting kom ikke helt i mål. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(converted.outName)}</strong>.`);
       }
@@ -856,7 +855,10 @@
             txt: converted.txt
           });
 
-          triggerDownload(converted.outName, converted.txt);
+          if (!uploadResult.ok) {
+            triggerDownload(converted.outName, converted.txt);
+          }
+
           summary.push({
             ok: true,
             file: file.name,
@@ -872,13 +874,14 @@
       const okCount = summary.filter((x) => x.ok).length;
       const failCount = summary.length - okCount;
       const uploadOkCount = summary.filter((x) => x.ok && x.uploadOk).length;
+      const localDownloadCount = summary.filter((x) => x.ok && !x.uploadOk).length;
       state.lastDownloadName = okCount === 1 ? summary.find((x) => x.ok)?.outName || null : null;
       state.lastUploadResult = okCount === 1 ? summary.find((x) => x.ok)?.uploadResult || null : null;
 
       if (failCount === 0) {
         if (uploadOkCount === okCount) {
-          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert, lastet ned og lastet opp`, "success");
-          showHint("Alle konverterte filer ble også forsøkt lastet opp automatisk til samme prosjektmapper i Trimble Connect.");
+          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet opp`, "success");
+          showHint("Alle konverterte filer ble automatisk lastet opp tilbake til samme prosjektmapper i Trimble Connect.");
         } else {
           setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet ned`, "success");
           showHint(
@@ -897,6 +900,7 @@
         okCount,
         failCount,
         uploadOkCount,
+        localDownloadCount,
         files: summary
       });
     } catch (err) {
