@@ -231,7 +231,17 @@ function extractUploadInfo(payload) {
       payload.result?.uploadId ||
       payload.result?.id ||
       null,
+    fileId:
+      payload.fileId ||
+      payload.data?.fileId ||
+      payload.result?.fileId ||
+      null,
     uploadUrl: extractPossibleUrl(payload),
+    contents:
+      payload.contents ||
+      payload.data?.contents ||
+      payload.result?.contents ||
+      [],
     completeUrl:
       payload.completeUrl ||
       payload.completionUrl ||
@@ -507,7 +517,47 @@ async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics) {
   return { ok: false, error: "Ingen signed URL upload-metode fungerte." };
 }
 
-async function completeUpload({ token, projectLocation, uploadId, completeUrl, fileBuffer, diagnostics }) {
+function buildCompleteBodies({ uploadId, uploadInfo, fileBuffer, digest, digestHeader }) {
+  const fileId = uploadInfo?.fileId || null;
+  const contents = Array.isArray(uploadInfo?.contents) ? uploadInfo.contents : [];
+  const content = contents[0] && typeof contents[0] === "object" ? contents[0] : {};
+  const size = fileBuffer.length;
+  const contentWithoutUrl = { ...content };
+  delete contentWithoutUrl.url;
+
+  const contentDigest = {
+    ...contentWithoutUrl,
+    digest: digestHeader,
+    md5: digest,
+    contentMD5: digest,
+    contentMd5: digest,
+    size
+  };
+
+  return [
+    { label: "body-format-single-part-underscore", body: { format: "SINGLE_PART" } },
+    { label: "body-format-single-part-lower", body: { format: "single_part" } },
+    { label: "body-format-singlepart-lower", body: { format: "singlepart" } },
+    { label: "body-format-single-part-camel", body: { format: "singlePart" } },
+    { label: "body-format-single-part-with-upload-id", body: { uploadId, format: "SINGLE_PART" } },
+    { label: "body-format-single-part-with-file-id", body: { fileId, format: "SINGLE_PART" } },
+    { label: "body-type-singlepart-with-file-id", body: { fileId, type: "SINGLEPART" } },
+    { label: "body-file-id-only", body: { fileId } },
+    { label: "body-upload-id-only", body: { uploadId } },
+    { label: "body-digest-fields", body: { digest: digestHeader, md5: digest, contentMD5: digest, size } },
+    { label: "body-file-id-digest-fields", body: { fileId, digest: digestHeader, md5: digest, contentMD5: digest, size } },
+    { label: "body-contents-digest", body: { contents: [contentDigest] } },
+    { label: "body-format-contents-digest", body: { format: "SINGLE_PART", contents: [contentDigest] } },
+    { label: "body-type-contents-digest", body: { type: "SINGLEPART", contents: [contentDigest] } },
+    { label: "body-file-id-contents-digest", body: { fileId, contents: [contentDigest] } },
+    { label: "body-upload-id-contents-digest", body: { uploadId, contents: [contentDigest] } }
+  ].filter((candidate) => {
+    if (candidate.body.fileId === null) return false;
+    return true;
+  });
+}
+
+async function completeUpload({ token, projectLocation, uploadId, completeUrl, uploadInfo, fileBuffer, diagnostics }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
   const candidates = [];
   const digest = md5Base64(fileBuffer);
@@ -590,6 +640,16 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, f
       headers: { "Content-Type": "application/json", Digest: digestHeader },
       body: { uploadId }
     });
+
+    for (const bodyCandidate of buildCompleteBodies({ uploadId, uploadInfo, fileBuffer, digest, digestHeader })) {
+      candidates.push({
+        label: `complete-path-${bodyCandidate.label}`,
+        url: completePath,
+        headers: { "Content-Type": "application/json", Digest: digestHeader },
+        body: bodyCandidate.body
+      });
+    }
+
     candidates.push({
       label: "upload-complete-query",
       url: `${base}/files/fs/upload/complete?uploadId=${encodeURIComponent(uploadId)}`,
@@ -755,6 +815,7 @@ async function trySignedUploadFlow({ token, projectLocation, parentId, fileName,
       projectLocation,
       uploadId: uploadInfo.uploadId,
       completeUrl: uploadInfo.completeUrl,
+      uploadInfo,
       fileBuffer,
       diagnostics
     });
