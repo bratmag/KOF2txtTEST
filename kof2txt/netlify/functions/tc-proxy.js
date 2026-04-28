@@ -47,6 +47,10 @@ function safeHost(url) {
   try { return new URL(url).host; } catch { return null; }
 }
 
+function md5Base64(buffer) {
+  return require("crypto").createHash("md5").update(buffer).digest("base64");
+}
+
 let regionCache = null;
 
 async function discoverRegions() {
@@ -503,43 +507,71 @@ async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics) {
   return { ok: false, error: "Ingen signed URL upload-metode fungerte." };
 }
 
-async function completeUpload({ token, projectLocation, uploadId, completeUrl, diagnostics }) {
+async function completeUpload({ token, projectLocation, uploadId, completeUrl, fileBuffer, diagnostics }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
   const candidates = [];
+  const digest = md5Base64(fileBuffer);
+  const digestHeader = `MD5=${digest}`;
 
   if (completeUrl) {
-    candidates.push({ label: "provided-complete-url", url: completeUrl, body: {} });
+    candidates.push({
+      label: "provided-complete-url-digest",
+      url: completeUrl,
+      headers: { Digest: digestHeader },
+      body: undefined
+    });
   }
   if (uploadId) {
     candidates.push({
-      label: "complete-path-empty-body",
+      label: "complete-path-digest",
       url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      headers: { Digest: digestHeader },
+      body: undefined
+    });
+    candidates.push({
+      label: "complete-path-content-md5",
+      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      headers: { "Content-MD5": digest },
+      body: undefined
+    });
+    candidates.push({
+      label: "complete-path-digest-and-content-md5",
+      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      headers: { Digest: digestHeader, "Content-MD5": digest },
+      body: undefined
+    });
+    candidates.push({
+      label: "complete-path-digest-empty-json",
+      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
       body: {}
     });
     candidates.push({
       label: "complete-path-upload-id-body",
       url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
       body: { uploadId }
     });
     candidates.push({
       label: "upload-complete-query",
       url: `${base}/files/fs/upload/complete?uploadId=${encodeURIComponent(uploadId)}`,
+      headers: { Digest: digestHeader },
       body: {}
     });
     candidates.push({
       label: "upload-id-root",
       url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}`,
+      headers: { Digest: digestHeader },
       body: {}
     });
   }
 
   for (const candidate of candidates) {
+    const hasBody = candidate.body !== undefined;
     const res = await fetchWithBearer(candidate.url, token, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(candidate.body)
+      headers: candidate.headers || {},
+      body: hasBody ? JSON.stringify(candidate.body) : undefined
     });
 
     diagnostics.push({
@@ -685,6 +717,7 @@ async function trySignedUploadFlow({ token, projectLocation, parentId, fileName,
       projectLocation,
       uploadId: uploadInfo.uploadId,
       completeUrl: uploadInfo.completeUrl,
+      fileBuffer,
       diagnostics
     });
 
