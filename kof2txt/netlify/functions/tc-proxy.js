@@ -58,6 +58,10 @@ function isUploadAlreadyCompleted(res) {
     /file upload already completed/i.test(details);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 let regionCache = null;
 
 async function discoverRegions() {
@@ -491,10 +495,13 @@ async function handleProbeCore(body) {
   });
 }
 
-async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics) {
+async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics, fileName) {
   const body = new Uint8Array(fileBuffer);
+  const preferredContentType = /\.xml$/i.test(String(fileName || ""))
+    ? "application/xml; charset=utf-8"
+    : "text/plain; charset=utf-8";
   const methods = [
-    { method: "PUT", headers: { "Content-Type": "text/plain; charset=utf-8" } },
+    { method: "PUT", headers: { "Content-Type": preferredContentType } },
     { method: "PUT", headers: { "Content-Type": "application/octet-stream" } },
     { method: "PUT", headers: {} },
     { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8" } }
@@ -705,6 +712,50 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, u
     }
   }
 
+  if (uploadId) {
+    const completePath = `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`;
+    const retryCandidate = candidates.find((candidate) => candidate.label === "complete-path-digest-empty-json") || {
+      label: "complete-path-digest-empty-json",
+      url: completePath,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
+      body: {}
+    };
+
+    for (const delayMs of [1000, 2500, 5000]) {
+      await sleep(delayMs);
+
+      const res = await fetchWithBearer(retryCandidate.url, token, {
+        method: "POST",
+        headers: retryCandidate.headers || {},
+        body: JSON.stringify(retryCandidate.body || {})
+      });
+
+      diagnostics.push({
+        step: "complete-upload",
+        variant: `${retryCandidate.label}-retry-${delayMs}ms`,
+        url: retryCandidate.url,
+        status: res.status,
+        ok: res.ok,
+        preview: shortText(res.text, 300)
+      });
+
+      if (res.ok) {
+        return { ok: true, response: res.json || res.text };
+      }
+
+      if (isUploadAlreadyCompleted(res)) {
+        return {
+          ok: true,
+          alreadyCompleted: true,
+          response: {
+            status: "completed",
+            completionState: "already_completed"
+          }
+        };
+      }
+    }
+  }
+
   return { ok: false, error: "Kunne ikke fullføre opplastingen." };
 }
 
@@ -817,7 +868,7 @@ async function trySignedUploadFlow({ token, projectLocation, parentId, fileName,
     const uploadInfo = extractUploadInfo(initRes.json);
     if (!uploadInfo.uploadUrl) continue;
 
-    const uploadRes = await uploadToSignedUrl(uploadInfo.uploadUrl, fileBuffer, diagnostics);
+    const uploadRes = await uploadToSignedUrl(uploadInfo.uploadUrl, fileBuffer, diagnostics, fileName);
     if (!uploadRes.ok) continue;
 
     if (!uploadInfo.uploadId && !uploadInfo.completeUrl) {
