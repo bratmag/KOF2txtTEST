@@ -684,7 +684,7 @@
   }
 
   function shouldConvertToLandXml(kofText) {
-    return /^09(?:_|\s+)91\b/im.test(String(kofText || ""));
+    return /^\s*09(?:_|\s+)91\b/im.test(String(kofText || ""));
   }
 
   function convertKofFile(kofText, fileName) {
