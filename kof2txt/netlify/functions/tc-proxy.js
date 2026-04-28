@@ -512,6 +512,7 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, f
   const candidates = [];
   const digest = md5Base64(fileBuffer);
   const digestHeader = `MD5=${digest}`;
+  const digestHeaderLower = `md5=${digest}`;
 
   if (completeUrl) {
     candidates.push({
@@ -522,33 +523,70 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, f
     });
   }
   if (uploadId) {
+    const completePath = `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`;
     candidates.push({
-      label: "complete-path-digest",
-      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
-      headers: { Digest: digestHeader },
+      label: "complete-path-json-content-type-no-body",
+      url: completePath,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
       body: undefined
     });
     candidates.push({
-      label: "complete-path-content-md5",
-      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
-      headers: { "Content-MD5": digest },
+      label: "complete-path-json-content-type-lower-digest-no-body",
+      url: completePath,
+      headers: { "Content-Type": "application/json", Digest: digestHeaderLower },
       body: undefined
     });
     candidates.push({
-      label: "complete-path-digest-and-content-md5",
-      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
-      headers: { Digest: digestHeader, "Content-MD5": digest },
+      label: "complete-path-octet-content-type-no-body",
+      url: completePath,
+      headers: { "Content-Type": "application/octet-stream", Digest: digestHeader },
+      body: undefined
+    });
+    candidates.push({
+      label: "complete-path-text-content-type-no-body",
+      url: completePath,
+      headers: { "Content-Type": "text/plain", Digest: digestHeader },
+      body: undefined
+    });
+    candidates.push({
+      label: "complete-path-singlepart-query-no-body",
+      url: `${completePath}?format=SINGLEPART`,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
+      body: undefined
+    });
+    candidates.push({
+      label: "complete-path-type-singlepart-query-no-body",
+      url: `${completePath}?type=SINGLEPART`,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
+      body: undefined
+    });
+    candidates.push({
+      label: "complete-path-multipart-false-query-no-body",
+      url: `${completePath}?multipart=false`,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
       body: undefined
     });
     candidates.push({
       label: "complete-path-digest-empty-json",
-      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      url: completePath,
       headers: { "Content-Type": "application/json", Digest: digestHeader },
       body: {}
     });
     candidates.push({
+      label: "complete-path-singlepart-body",
+      url: completePath,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
+      body: { format: "SINGLEPART" }
+    });
+    candidates.push({
+      label: "complete-path-type-singlepart-body",
+      url: completePath,
+      headers: { "Content-Type": "application/json", Digest: digestHeader },
+      body: { type: "SINGLEPART" }
+    });
+    candidates.push({
       label: "complete-path-upload-id-body",
-      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      url: completePath,
       headers: { "Content-Type": "application/json", Digest: digestHeader },
       body: { uploadId }
     });
