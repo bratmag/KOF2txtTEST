@@ -163,7 +163,7 @@ async function fetchTextNoAuth(url) {
 function extractPossibleUrl(payload) {
   if (!payload || typeof payload !== "object") return null;
 
-  return (
+  const direct =
     payload.downloadUrl ||
     payload.downloadURL ||
     payload.uploadUrl ||
@@ -185,8 +185,32 @@ function extractPossibleUrl(payload) {
     payload.result?.downloadURL ||
     payload.result?.uploadUrl ||
     payload.result?.url ||
-    null
-  );
+    null;
+
+  if (direct) return direct;
+
+  if (Array.isArray(payload.contents)) {
+    for (const item of payload.contents) {
+      const nested = extractPossibleUrl(item);
+      if (nested) return nested;
+    }
+  }
+
+  if (Array.isArray(payload.data?.contents)) {
+    for (const item of payload.data.contents) {
+      const nested = extractPossibleUrl(item);
+      if (nested) return nested;
+    }
+  }
+
+  if (Array.isArray(payload.result?.contents)) {
+    for (const item of payload.result.contents) {
+      const nested = extractPossibleUrl(item);
+      if (nested) return nested;
+    }
+  }
+
+  return null;
 }
 
 function extractUploadInfo(payload) {
@@ -450,6 +474,8 @@ async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics) {
   const body = new Uint8Array(fileBuffer);
   const methods = [
     { method: "PUT", headers: { "Content-Type": "text/plain; charset=utf-8" } },
+    { method: "PUT", headers: { "Content-Type": "application/octet-stream" } },
+    { method: "PUT", headers: {} },
     { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8" } }
   ];
 
@@ -479,25 +505,47 @@ async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics) {
 
 async function completeUpload({ token, projectLocation, uploadId, completeUrl, diagnostics }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
-  const urls = [];
+  const candidates = [];
 
-  if (completeUrl) urls.push(completeUrl);
+  if (completeUrl) {
+    candidates.push({ label: "provided-complete-url", url: completeUrl, body: {} });
+  }
   if (uploadId) {
-    urls.push(`${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`);
+    candidates.push({
+      label: "complete-path-empty-body",
+      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      body: {}
+    });
+    candidates.push({
+      label: "complete-path-upload-id-body",
+      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}/complete`,
+      body: { uploadId }
+    });
+    candidates.push({
+      label: "upload-complete-query",
+      url: `${base}/files/fs/upload/complete?uploadId=${encodeURIComponent(uploadId)}`,
+      body: {}
+    });
+    candidates.push({
+      label: "upload-id-root",
+      url: `${base}/files/fs/upload/${encodeURIComponent(uploadId)}`,
+      body: {}
+    });
   }
 
-  for (const url of urls) {
-    const res = await fetchWithBearer(url, token, {
+  for (const candidate of candidates) {
+    const res = await fetchWithBearer(candidate.url, token, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({})
+      body: JSON.stringify(candidate.body)
     });
 
     diagnostics.push({
       step: "complete-upload",
-      url,
+      variant: candidate.label,
+      url: candidate.url,
       status: res.status,
       ok: res.ok,
       preview: shortText(res.text, 300)
