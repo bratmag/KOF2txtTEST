@@ -75,7 +75,8 @@
   }
 
   function triggerDownload(filename, text) {
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const mimeType = /\.xml$/i.test(String(filename || "")) ? "application/xml;charset=utf-8" : "text/plain;charset=utf-8";
+    const blob = new Blob([text], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -89,6 +90,11 @@
   function getTxtFilename(filename) {
     const name = String(filename || "output.kof").trim() || "output.kof";
     return /\.kof$/i.test(name) ? name.replace(/\.kof$/i, ".txt") : `${name}.txt`;
+  }
+
+  function getXmlFilename(filename) {
+    const name = String(filename || "output.kof").trim() || "output.kof";
+    return /\.kof$/i.test(name) ? name.replace(/\.kof$/i, ".xml") : `${name}.xml`;
   }
 
   function getUploadTargetFile() {
@@ -611,18 +617,18 @@
   }
 
   function tryParseFreePointLine(line) {
+    const parsed = parseKof05Record(line);
+    if (parsed) {
+      return {
+        name: parsed.rawName,
+        north: parsed.n,
+        east: parsed.e,
+        height: parsed.h
+      };
+    }
+
     const s = String(line || "").trim();
-
-    let m = s.match(/^05\s+([^\s]+)\s+([^\s]+)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
-    if (m) return { name: m[1], north: parseNumber(m[3]), east: parseNumber(m[4]), height: parseNumber(m[5]) };
-
-    m = s.match(/^05\s+([^\s]+)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
-    if (m) return { name: m[1], north: parseNumber(m[2]), east: parseNumber(m[3]), height: parseNumber(m[4]) };
-
-    m = s.match(/^05\s+([^\s]+)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
-    if (m) return { name: m[1], north: parseNumber(m[2]), east: parseNumber(m[3]), height: null };
-
-    m = s.match(/^([^\s,;]+)[\s,;]+(-?\d+(?:[.,]\d+)?)[\s,;]+(-?\d+(?:[.,]\d+)?)[\s,;]+(-?\d+(?:[.,]\d+)?)\s*$/);
+    const m = s.match(/^([^\s,;]+)[\s,;]+(-?\d+(?:[.,]\d+)?)[\s,;]+(-?\d+(?:[.,]\d+)?)[\s,;]+(-?\d+(?:[.,]\d+)?)\s*$/);
     if (m) return { name: m[1], north: parseNumber(m[2]), east: parseNumber(m[3]), height: parseNumber(m[4]) };
 
     return null;
@@ -675,6 +681,228 @@
     const s = String(value ?? "");
     if (/[",;\n]/.test(s)) return `"${s.replace(/"/g, "\"\"")}"`;
     return s;
+  }
+
+  function shouldConvertToLandXml(kofText) {
+    return /^09(?:_|\s+)91\b/im.test(String(kofText || ""));
+  }
+
+  function convertKofFile(kofText, fileName) {
+    const sourceText = String(kofText || "");
+
+    if (shouldConvertToLandXml(sourceText)) {
+      return {
+        format: "xml",
+        outName: getXmlFilename(fileName),
+        text: kofToLandXml(sourceText, { fileName })
+      };
+    }
+
+    return {
+      format: "txt",
+      outName: getTxtFilename(fileName),
+      text: convertKofToTxt(sourceText)
+    };
+  }
+
+  function parseKof05Record(line) {
+    const match = String(line || "").trim().match(/^05\s+(.+?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
+    if (!match) return null;
+
+    const descriptor = String(match[1] || "").trim();
+    const fields = descriptor.split(/\s{2,}/).filter(Boolean);
+    let rawName = fields[0] || descriptor;
+
+    if (fields.length === 1) {
+      const tokens = descriptor.split(/\s+/).filter(Boolean);
+      if (tokens.length >= 3) {
+        rawName = tokens.slice(0, -1).join(" ");
+      }
+    }
+
+    return {
+      rawName: String(rawName || "").trim(),
+      n: parseNumber(match[2]),
+      e: parseNumber(match[3]),
+      h: parseNumber(match[4])
+    };
+  }
+
+  function kofToLandXml(kofText, options = {}) {
+    const fileName = String(options.fileName || "").replace(/\.kof$/i, "") || "KOF";
+    const now = new Date();
+    const date = now.toISOString().slice(0, 10);
+    const time = now.toISOString().slice(11, 19);
+    const parsed = parseKofForLandXml(kofText);
+
+    return [
+      "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+      `<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.landxml.org/schema/LandXML-1.2 http://www.landxml.org/schema/LandXML-1.2/LandXML-1.2.xsd" version="1.2" date="${date}" time="${time}">`,
+      "  <Project name=\"\" desc=\"\">",
+      "    <Feature code=\"trimbleLayers\">",
+      "      <Feature code=\"trimbleLayer\">",
+      "        <Property label=\"name\" value=\"Punkter\" />",
+      "        <Property label=\"color\" value=\"255,255,255\" />",
+      "        <Property label=\"lineStyleName\" value=\"Gjennomgående\" />",
+      "        <Property label=\"lineWeight\" value=\"0\" />",
+      "      </Feature>",
+      "      <Feature code=\"trimbleLayer\">",
+      `        <Property label="name" value="Kof_${escapeXml(fileName)}_" />`,
+      "        <Property label=\"color\" value=\"255,255,255\" />",
+      "        <Property label=\"lineStyleName\" value=\"Gjennomgående\" />",
+      "        <Property label=\"lineWeight\" value=\"0\" />",
+      "      </Feature>",
+      "    </Feature>",
+      "  </Project>",
+      "  <Units>",
+      "    <Metric linearUnit=\"meter\" widthUnit=\"meter\" heightUnit=\"meter\" diameterUnit=\"meter\" areaUnit=\"squareMeter\" volumeUnit=\"cubicMeter\" temperatureUnit=\"celsius\" pressureUnit=\"HPA\" angularUnit=\"radians\" directionUnit=\"radians\" elevationUnit=\"meter\" velocityUnit=\"kilometersPerHour\" />",
+      "  </Units>",
+      `  <Application name="${escapeXml(CONFIG.APP_TITLE)}" manufacturer="" version="1.0" timeStamp="${date}T${time}">`,
+      `    <Author createdBy="kof2xml" timeStamp="${date}T${time}" />`,
+      "  </Application>",
+      "  <FeatureDictionary name=\"ISO15143-4\" />",
+      buildLandXmlCgPoints(parsed.points),
+      buildLandXmlPlanFeatures(parsed.lines, fileName),
+      "</LandXML>"
+    ].filter(Boolean).join("\n");
+  }
+
+  function parseKofForLandXml(kofText) {
+    const lines = String(kofText || "").split(/\r?\n/);
+    const points = [];
+    const lineFeatures = [];
+    let inLine = false;
+    let currentLinePoints = [];
+
+    for (const rawLine of lines) {
+      const line = String(rawLine || "").trim();
+      if (!line) continue;
+
+      if (/^09(?:_|\s+)91\b/i.test(line)) {
+        inLine = true;
+        currentLinePoints = [];
+        continue;
+      }
+
+      if (/^09(?:_|\s+)99\b/i.test(line)) {
+        if (inLine && currentLinePoints.length >= 2) {
+          lineFeatures.push({ pts: currentLinePoints });
+        }
+        inLine = false;
+        currentLinePoints = [];
+        continue;
+      }
+
+      const point = parseKof05Record(line);
+      if (!point) continue;
+
+      if (inLine) {
+        currentLinePoints.push(point);
+      } else {
+        points.push(point);
+      }
+    }
+
+    return {
+      points: dedupeLandXmlPointNames(points),
+      lines: lineFeatures
+    };
+  }
+
+  function dedupeLandXmlPointNames(points) {
+    const counts = {};
+    return points.map((point) => {
+      const base = point.rawName || "Point";
+      const next = counts[base] || 0;
+      counts[base] = next + 1;
+      return {
+        ...point,
+        name: next === 0 ? base : `${base}_${next}`
+      };
+    });
+  }
+
+  function buildLandXmlCgPoints(points) {
+    if (!points.length) return "  <CgPoints />";
+
+    const inner = points.map((point) => {
+      const coords = `${formatLandXmlNumber(point.n)} ${formatLandXmlNumber(point.e)} ${formatLandXmlNumber(point.h)}`;
+      const name = escapeXml(point.name);
+      return `    <CgPoint name="${name}" desc="${name}" featureRef="Punkter">${coords}</CgPoint>`;
+    }).join("\n");
+
+    return `  <CgPoints>\n${inner}\n  </CgPoints>`;
+  }
+
+  function buildLandXmlPlanFeatures(lines, fileName) {
+    if (!lines.length) return "";
+
+    const features = lines.map((line, index) => {
+      const name = `${escapeXml(fileName)}_${index + 1}`;
+      const layer = `Kof_${escapeXml(fileName)}_`;
+      return [
+        `    <PlanFeature name="${name}">`,
+        "      <CoordGeom>",
+        buildLandXmlCoordGeom(line.pts),
+        "      </CoordGeom>",
+        "      <Feature code=\"trimbleCADProperties\">",
+        `        <Property label="layer" value="${layer}" />`,
+        "        <Property label=\"color\" value=\"144,238,144\" />",
+        "      </Feature>",
+        "    </PlanFeature>"
+      ].join("\n");
+    }).join("\n");
+
+    return `  <PlanFeatures>\n${features}\n  </PlanFeatures>`;
+  }
+
+  function buildLandXmlCoordGeom(points) {
+    if (points.length === 2) {
+      return [
+        `        <Line length="${formatLandXmlNumber(distance2d(points[0], points[1]))}" staStart="0.00000">`,
+        `          <Start>${formatLandXmlNumber(points[0].n)} ${formatLandXmlNumber(points[0].e)} ${formatLandXmlNumber(points[0].h)}</Start>`,
+        `          <End>${formatLandXmlNumber(points[1].n)} ${formatLandXmlNumber(points[1].e)} ${formatLandXmlNumber(points[1].h)}</End>`,
+        "        </Line>"
+      ].join("\n");
+    }
+
+    const pointList = points.map((point) => (
+      `${formatLandXmlNumber(point.n)} ${formatLandXmlNumber(point.e)} ${formatLandXmlNumber(point.h)}`
+    )).join(" ");
+
+    return [
+      `        <IrregularLine length="${formatLandXmlNumber(totalDistance2d(points))}" staStart="0.00000">`,
+      `          <PntList3D>${pointList}</PntList3D>`,
+      "        </IrregularLine>"
+    ].join("\n");
+  }
+
+  function distance2d(a, b) {
+    const dn = (b?.n || 0) - (a?.n || 0);
+    const de = (b?.e || 0) - (a?.e || 0);
+    return Math.sqrt((dn * dn) + (de * de));
+  }
+
+  function totalDistance2d(points) {
+    let total = 0;
+    for (let i = 1; i < points.length; i += 1) {
+      total += distance2d(points[i - 1], points[i]);
+    }
+    return total;
+  }
+
+  function formatLandXmlNumber(value, decimals = 5) {
+    if (value == null || !Number.isFinite(value)) return "0.00000";
+    return Number(value).toFixed(decimals);
+  }
+
+  function escapeXml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
   }
 
   function isNameKey(key) {
@@ -775,9 +1003,8 @@
     const result = proxyRes.json;
     if (!result.ok) throw new Error(result.error || result.step || "Kunne ikke laste ned KOF-fil");
 
-    const txt = convertKofToTxt(result.text || "");
-    const outName = getTxtFilename(result.file?.name || file.name || "output.kof");
-    return { outName, txt, result };
+    const converted = convertKofFile(result.text || "", result.file?.name || file.name || "output.kof");
+    return { ...converted, result };
   }
 
   async function processSelectedFile() {
@@ -800,7 +1027,7 @@
       const uploadResult = await uploadConvertedTxtToProject({
         sourceFile: converted.result.file,
         outName: converted.outName,
-        txt: converted.txt
+        txt: converted.text
       });
       state.lastUploadResult = uploadResult;
 
@@ -808,7 +1035,7 @@
         setStatus(`Ferdig: ${converted.outName} er lastet opp til prosjektet`, "success");
         showHint("Den konverterte filen ble automatisk lastet opp tilbake til samme prosjektmappe i Trimble Connect.");
       } else {
-        triggerDownload(converted.outName, converted.txt);
+        triggerDownload(converted.outName, converted.text);
         setStatus(`Ferdig: ${converted.outName} er lastet ned lokalt`, "success");
         showHint(`Automatisk opplasting kom ikke helt i mål. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(converted.outName)}</strong>.`);
       }
@@ -816,7 +1043,7 @@
       setDebug({
         action: "processSelectedFile",
         sourceFile: converted.result.file,
-        convertedFile: { name: converted.outName, size: converted.txt.length },
+        convertedFile: { name: converted.outName, format: converted.format, size: converted.text.length },
         uploadResult,
         preview: shortText(converted.result.text || "", 300)
       });
@@ -852,17 +1079,18 @@
           const uploadResult = await uploadConvertedTxtToProject({
             sourceFile: converted.result.file,
             outName: converted.outName,
-            txt: converted.txt
+            txt: converted.text
           });
 
           if (!uploadResult.ok) {
-            triggerDownload(converted.outName, converted.txt);
+            triggerDownload(converted.outName, converted.text);
           }
 
           summary.push({
             ok: true,
             file: file.name,
             outName: converted.outName,
+            format: converted.format,
             uploadOk: !!uploadResult.ok,
             uploadResult
           });
@@ -921,19 +1149,19 @@
 
       setStatus(`Konverterer lokal fil ${file.name}...`, "working");
       const kofText = await file.text();
-      const txt = convertKofToTxt(kofText || "");
-      const outName = getTxtFilename(file.name || "output.kof");
+      const converted = convertKofFile(kofText || "", file.name || "output.kof");
+      const outName = converted.outName;
       state.lastDownloadName = outName;
       state.lastUploadResult = null;
 
-      triggerDownload(outName, txt);
+      triggerDownload(outName, converted.text);
       setStatus(`Ferdig: ${outName} er lastet ned lokalt`, "success");
       showHint(`Lokal fil er konvertert direkte fra maskinen din. Resultatet <strong>${escapeHtml(outName)}</strong> er lastet ned lokalt.`);
 
       setDebug({
         action: "processLocalFile",
         sourceFile: { name: file.name, size: file.size, type: file.type },
-        convertedFile: { name: outName, size: txt.length },
+        convertedFile: { name: outName, format: converted.format, size: converted.text.length },
         preview: shortText(kofText || "", 300)
       });
     } catch (err) {
