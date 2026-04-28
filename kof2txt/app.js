@@ -730,7 +730,15 @@
         action: "listProjectKofFiles",
         fileCount: state.fileList.length,
         candidatesTried: result.candidatesTried,
-        source: result.source
+        source: result.source,
+        sources: result.sources || null,
+        diagnostics: result.diagnostics || null,
+        files: state.fileList.map((f) => ({
+          id: f.id,
+          name: f.name,
+          parentId: f.parentId || null,
+          path: f.path || ""
+        }))
       });
     } catch (err) {
       console.error(err);
