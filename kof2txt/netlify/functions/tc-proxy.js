@@ -697,7 +697,10 @@ async function completeUpload({ token, projectLocation, uploadId, completeUrl, u
       return {
         ok: true,
         alreadyCompleted: true,
-        response: res.json || res.text
+        response: {
+          status: "completed",
+          completionState: "already_completed"
+        }
       };
     }
   }
