@@ -1035,6 +1035,7 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
       source: folderTree.source,
       candidatesTried: folderTree.candidatesTried,
       files: folderTree.files,
+      convertedFiles: folderTree.convertedFiles || [],
       diagnostics: folderTree.diagnostics,
       sources: folderTree.sources
     };
@@ -1140,6 +1141,7 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
   const base = await getCoreBaseUrlAsync(projectLocation);
   const diagnostics = Array.isArray(initialDiagnostics) ? [...initialDiagnostics] : [];
   const filesByKey = new Map();
+  const allFilesByKey = new Map();
   const folderQueue = seedFolderIds.map((id) => ({ id, pathParts: [] }));
   const visitedFolders = new Set();
   const sources = [];
@@ -1206,6 +1208,13 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
         continue;
       }
 
+      if (item.id && item.name) {
+        const allKey = `${item.id}|${item.parentId || ""}|${item.name}`;
+        if (!allFilesByKey.has(allKey)) {
+          allFilesByKey.set(allKey, item);
+        }
+      }
+
       if (!item.id || !isKofName(item.name)) continue;
 
       const key = `${item.id}|${item.parentId || ""}|${item.name}`;
@@ -1215,7 +1224,19 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
     }
   }
 
-  const files = Array.from(filesByKey.values()).sort((a, b) =>
+  const convertedFiles = Array.from(allFilesByKey.values())
+    .filter((item) => isConvertedOutputName(item.name))
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      parentId: item.parentId || null,
+      path: item.path || ""
+    }));
+
+  const files = Array.from(filesByKey.values()).map((file) => ({
+    ...file,
+    existingOutputs: findExistingConvertedOutputs(file, convertedFiles)
+  })).sort((a, b) =>
     String(a.name).localeCompare(String(b.name), undefined, {
       sensitivity: "base"
     })
@@ -1226,6 +1247,7 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
     source: "folder-tree",
     candidatesTried: diagnostics.length,
     files,
+    convertedFiles,
     diagnostics,
     sources
   };
@@ -1233,6 +1255,24 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
 
 function isKofName(name) {
   return /\.kof$/i.test(String(name || ""));
+}
+
+function isConvertedOutputName(name) {
+  return /\.(txt|xml)$/i.test(String(name || ""));
+}
+
+function outputBaseName(name) {
+  return String(name || "").replace(/\.(kof|txt|xml)$/i, "").toLowerCase();
+}
+
+function findExistingConvertedOutputs(file, convertedFiles) {
+  const fileBase = outputBaseName(file?.name);
+  const parentId = file?.parentId || null;
+
+  return (convertedFiles || []).filter((candidate) =>
+    (candidate.parentId || null) === parentId &&
+    outputBaseName(candidate.name) === fileBase
+  );
 }
 
 function normalizePathValue(pathValue) {

@@ -26,7 +26,7 @@
     explorerVisible: false,
     lastDownloadName: null,
     lastAutoRefreshAt: 0,
-    autoConvertOnOpenStarted: false,
+    autoConvertInProgress: false,
     lastUploadResult: null
   };
 
@@ -913,6 +913,14 @@
   function isEastKey(key) { return ["e", "ost", "east", "easting", "x"].includes(key); }
   function isHeightKey(key) { return ["h", "z", "hoyde", "height", "elev", "elevation", "kote"].includes(key); }
 
+  function hasExistingConvertedOutput(file) {
+    return Array.isArray(file?.existingOutputs) && file.existingOutputs.length > 0;
+  }
+
+  function getPendingKofFiles(files = state.fileList) {
+    return (Array.isArray(files) ? files : []).filter((file) => !hasExistingConvertedOutput(file));
+  }
+
   async function refreshKofList() {
     try {
       setBusy(true);
@@ -951,18 +959,26 @@
       if (state.fileList.length === 0) {
         setStatus("Ingen KOF-filer funnet i prosjektet", "neutral");
       } else {
-        setStatus(`Fant ${state.fileList.length} KOF-fil${state.fileList.length === 1 ? "" : "er"}`, "success");
+        const pendingCount = getPendingKofFiles().length;
+        const convertedCount = state.fileList.length - pendingCount;
+        const suffix = convertedCount
+          ? `, ${pendingCount} mangler konvertering`
+          : "";
+        setStatus(`Fant ${state.fileList.length} KOF-fil${state.fileList.length === 1 ? "" : "er"}${suffix}`, "success");
       }
 
+      const pendingFiles = getPendingKofFiles();
       const debugPayload = {
         action: "listProjectKofFiles",
         fileCount: state.fileList.length,
+        pendingCount: pendingFiles.length,
         candidatesTried: result.candidatesTried,
         source: result.source,
         sources: result.sources || null,
         files: state.fileList.map((f) => ({
           name: f.name,
-          path: f.path || ""
+          path: f.path || "",
+          existingOutputs: (f.existingOutputs || []).map((output) => output.name)
         }))
       };
 
@@ -989,13 +1005,18 @@
     debug("Auto-refreshing KOF list", { reason });
     await refreshKofList();
 
-    if (!CONFIG.AUTO_CONVERT_ON_OPEN || state.autoConvertOnOpenStarted || !state.fileList.length) {
+    const pendingFiles = getPendingKofFiles();
+    if (!CONFIG.AUTO_CONVERT_ON_OPEN || state.autoConvertInProgress || !pendingFiles.length) {
       return;
     }
 
-    state.autoConvertOnOpenStarted = true;
-    setStatus(`Starter automatisk konvertering av ${state.fileList.length} KOF-fil${state.fileList.length === 1 ? "" : "er"}...`, "working");
-    await processAllFiles({ source: "auto-open" });
+    state.autoConvertInProgress = true;
+    try {
+      setStatus(`Starter automatisk konvertering av ${pendingFiles.length} KOF-fil${pendingFiles.length === 1 ? "" : "er"}...`, "working");
+      await processAllFiles({ source: "auto-open", files: pendingFiles });
+    } finally {
+      state.autoConvertInProgress = false;
+    }
   }
 
   async function downloadAndConvertFile(file) {
@@ -1075,12 +1096,33 @@
         return;
       }
 
+      const candidateFiles = Array.isArray(options.files) ? options.files : state.fileList;
+      const filesToProcess = options.skipExisting === false
+        ? candidateFiles
+        : getPendingKofFiles(candidateFiles);
+      const skippedCount = candidateFiles.length - filesToProcess.length;
+
+      if (!filesToProcess.length) {
+        setStatus("Alle KOF-filer har allerede en konvertert fil i samme mappe", "success");
+        showHint("Ingen filer ble konvertert pÃ¥ nytt. Slett eksisterende TXT/XML i Trimble Connect hvis du vil tvinge en ny konvertering.");
+        setDebug({
+          action: options.source === "auto-open" ? "autoConvertAllOnOpen" : "convertAll",
+          total: 0,
+          skippedCount,
+          skippedFiles: candidateFiles.map((file) => ({
+            file: file.name,
+            existingOutputs: (file.existingOutputs || []).map((output) => output.name)
+          }))
+        });
+        return;
+      }
+
       const summary = [];
       let count = 0;
 
-      for (const file of state.fileList) {
+      for (const file of filesToProcess) {
         count += 1;
-        setStatus(`Konverterer ${count}/${state.fileList.length}: ${file.name}...`, "working");
+        setStatus(`Konverterer ${count}/${filesToProcess.length}: ${file.name}...`, "working");
 
         try {
           const converted = await downloadAndConvertFile(file);
@@ -1116,10 +1158,14 @@
 
       if (failCount === 0) {
         if (uploadOkCount === okCount) {
-          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet opp`, "success");
-          showHint("Alle konverterte filer ble automatisk lastet opp tilbake til samme prosjektmapper i Trimble Connect.");
+          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet opp${skippedCount ? ` (${skippedCount} hoppet over)` : ""}`, "success");
+          showHint(
+            skippedCount
+              ? `Alle nye filer ble lastet opp. ${skippedCount} KOF-fil${skippedCount === 1 ? "" : "er"} hadde allerede TXT/XML i samme mappe og ble ikke konvertert pÃ¥ nytt.`
+              : "Alle konverterte filer ble automatisk lastet opp tilbake til samme prosjektmapper i Trimble Connect."
+          );
         } else {
-          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet ned`, "success");
+          setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet ned${skippedCount ? ` (${skippedCount} hoppet over)` : ""}`, "success");
           showHint(
             okCount === 1
               ? `Automatisk opplasting kom ikke helt i mål. Bruk <strong>Last opp til prosjekt</strong> for å åpne riktig mappe og laste opp <strong>${escapeHtml(state.lastDownloadName || "den konverterte filen")}</strong>.`
@@ -1133,6 +1179,7 @@
       setDebug({
         action: options.source === "auto-open" ? "autoConvertAllOnOpen" : "convertAll",
         total: summary.length,
+        skippedCount,
         okCount,
         failCount,
         uploadOkCount,
