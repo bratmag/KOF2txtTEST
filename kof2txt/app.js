@@ -7,6 +7,7 @@
     TOKEN_WAIT_MS: 30000,
     PROXY_URL: "/.netlify/functions/tc-proxy",
     APP_TITLE: "KOFConverter-TEST",
+    AUTO_CONVERT_ON_OPEN: true,
     MENU_MAIN_COMMAND: "KOF2TXT_TEST_MAIN",
     MENU_OPEN_COMMAND: "KOF2TXT_TEST_OPEN"
   };
@@ -25,6 +26,7 @@
     explorerVisible: false,
     lastDownloadName: null,
     lastAutoRefreshAt: 0,
+    autoConvertOnOpenStarted: false,
     lastUploadResult: null
   };
 
@@ -986,6 +988,14 @@
 
     debug("Auto-refreshing KOF list", { reason });
     await refreshKofList();
+
+    if (!CONFIG.AUTO_CONVERT_ON_OPEN || state.autoConvertOnOpenStarted || !state.fileList.length) {
+      return;
+    }
+
+    state.autoConvertOnOpenStarted = true;
+    setStatus(`Starter automatisk konvertering av ${state.fileList.length} KOF-fil${state.fileList.length === 1 ? "" : "er"}...`, "working");
+    await processAllFiles({ source: "auto-open" });
   }
 
   async function downloadAndConvertFile(file) {
@@ -1054,7 +1064,7 @@
     }
   }
 
-  async function processAllFiles() {
+  async function processAllFiles(options = {}) {
     try {
       setBusy(true);
       showHint(null, false);
@@ -1121,7 +1131,7 @@
       }
 
       setDebug({
-        action: "convertAll",
+        action: options.source === "auto-open" ? "autoConvertAllOnOpen" : "convertAll",
         total: summary.length,
         okCount,
         failCount,
