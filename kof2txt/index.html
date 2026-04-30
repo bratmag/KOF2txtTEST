@@ -44,6 +44,14 @@
       box-shadow: var(--shadow);
     }
 
+    .status-card {
+      position: sticky;
+      top: 8px;
+      z-index: 20;
+      padding: 10px 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12), var(--shadow);
+    }
+
     .card-header {
       display: flex;
       align-items: center;
@@ -183,6 +191,14 @@
       background: #f0f0ec;
       color: var(--text);
       border-left: 3px solid var(--muted);
+    }
+
+    .status-card .status {
+      margin-bottom: 0;
+    }
+
+    .status-card .hint {
+      margin-top: 8px;
     }
 
     .status.success {
