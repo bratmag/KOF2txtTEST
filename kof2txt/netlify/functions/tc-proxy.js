@@ -1229,6 +1229,9 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
     .map((item) => ({
       id: item.id,
       name: item.name,
+      versionId: item.versionId || null,
+      modifiedOn: item.modifiedOn || null,
+      revision: item.revision || null,
       parentId: item.parentId || null,
       path: item.path || ""
     }));
@@ -1354,6 +1357,26 @@ function walkAny(node, pathParts, out, seen) {
     details?.versionId ||
     null;
 
+  const effectiveModifiedOn =
+    node.modifiedOn ||
+    node.modifiedAt ||
+    node.updatedOn ||
+    node.lastModifiedOn ||
+    node.lastModified ||
+    details?.modifiedOn ||
+    details?.modifiedAt ||
+    details?.updatedOn ||
+    details?.lastModifiedOn ||
+    details?.lastModified ||
+    null;
+
+  const effectiveRevision =
+    node.revision ||
+    node.rev ||
+    details?.revision ||
+    details?.rev ||
+    null;
+
   const effectivePath =
     node.path ||
     node.folderPath ||
@@ -1369,6 +1392,8 @@ function walkAny(node, pathParts, out, seen) {
       id: String(effectiveId),
       name: String(effectiveName),
       versionId: effectiveVersionId ? String(effectiveVersionId) : null,
+      modifiedOn: effectiveModifiedOn ? String(effectiveModifiedOn) : null,
+      revision: effectiveRevision != null ? String(effectiveRevision) : null,
       parentId: effectiveParentId ? String(effectiveParentId) : null,
       path: effectivePath ? normalizePathValue(effectivePath) : buildPath(pathParts)
     };
@@ -1449,6 +1474,26 @@ function walkAnyItem(node, pathParts, out, seen) {
     details?.versionId ||
     null;
 
+  const effectiveModifiedOn =
+    node.modifiedOn ||
+    node.modifiedAt ||
+    node.updatedOn ||
+    node.lastModifiedOn ||
+    node.lastModified ||
+    details?.modifiedOn ||
+    details?.modifiedAt ||
+    details?.updatedOn ||
+    details?.lastModifiedOn ||
+    details?.lastModified ||
+    null;
+
+  const effectiveRevision =
+    node.revision ||
+    node.rev ||
+    details?.revision ||
+    details?.rev ||
+    null;
+
   const effectivePath =
     node.path ||
     node.folderPath ||
@@ -1466,6 +1511,8 @@ function walkAnyItem(node, pathParts, out, seen) {
       name: String(effectiveName),
       kind: normalizedKind,
       versionId: effectiveVersionId ? String(effectiveVersionId) : null,
+      modifiedOn: effectiveModifiedOn ? String(effectiveModifiedOn) : null,
+      revision: effectiveRevision != null ? String(effectiveRevision) : null,
       parentId: effectiveParentId ? String(effectiveParentId) : null,
       path: effectivePath ? normalizePathValue(effectivePath) : buildPath(pathParts)
     };

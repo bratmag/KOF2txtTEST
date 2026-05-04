@@ -913,12 +913,27 @@
   function isEastKey(key) { return ["e", "ost", "east", "easting", "x"].includes(key); }
   function isHeightKey(key) { return ["h", "z", "hoyde", "height", "elev", "elevation", "kote"].includes(key); }
 
-  function hasExistingConvertedOutput(file) {
-    return Array.isArray(file?.existingOutputs) && file.existingOutputs.length > 0;
+  function parseFileTimestamp(value) {
+    if (!value) return null;
+    const time = Date.parse(String(value));
+    return Number.isFinite(time) ? time : null;
+  }
+
+  function isConvertedOutputCurrent(file) {
+    const outputs = Array.isArray(file?.existingOutputs) ? file.existingOutputs : [];
+    if (!outputs.length) return false;
+
+    const sourceTime = parseFileTimestamp(file.modifiedOn);
+    if (!sourceTime) return true;
+
+    return outputs.some((output) => {
+      const outputTime = parseFileTimestamp(output.modifiedOn);
+      return outputTime != null && outputTime + 1000 >= sourceTime;
+    });
   }
 
   function getPendingKofFiles(files = state.fileList) {
-    return (Array.isArray(files) ? files : []).filter((file) => !hasExistingConvertedOutput(file));
+    return (Array.isArray(files) ? files : []).filter((file) => !isConvertedOutputCurrent(file));
   }
 
   async function refreshKofList() {
@@ -978,7 +993,16 @@
         files: state.fileList.map((f) => ({
           name: f.name,
           path: f.path || "",
-          existingOutputs: (f.existingOutputs || []).map((output) => output.name)
+          versionId: f.versionId || null,
+          revision: f.revision || null,
+          modifiedOn: f.modifiedOn || null,
+          conversionPending: !isConvertedOutputCurrent(f),
+          existingOutputs: (f.existingOutputs || []).map((output) => ({
+            name: output.name,
+            versionId: output.versionId || null,
+            revision: output.revision || null,
+            modifiedOn: output.modifiedOn || null
+          }))
         }))
       };
 
@@ -1111,7 +1135,15 @@
           skippedCount,
           skippedFiles: candidateFiles.map((file) => ({
             file: file.name,
-            existingOutputs: (file.existingOutputs || []).map((output) => output.name)
+            versionId: file.versionId || null,
+            revision: file.revision || null,
+            modifiedOn: file.modifiedOn || null,
+            existingOutputs: (file.existingOutputs || []).map((output) => ({
+              name: output.name,
+              versionId: output.versionId || null,
+              revision: output.revision || null,
+              modifiedOn: output.modifiedOn || null
+            }))
           }))
         });
         return;
