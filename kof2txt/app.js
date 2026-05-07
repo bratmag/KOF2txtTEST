@@ -558,19 +558,20 @@
     const points = parseKofPoints(kofText);
     if (!points.length) {
       return [
-        "Punktnavn,Nord,Øst,Høyde",
+        "Punktnavn,Nord,Øst,Høyde,Kode",
         "# Fant ingen punkter i KOF-fila",
         "# Første 1000 tegn:",
         ...String(kofText || "").slice(0, 1000).split(/\r?\n/)
       ].join("\n");
     }
-    const lines = ["Punktnavn,Nord,Øst,Høyde"];
+    const lines = ["Punktnavn,Nord,Øst,Høyde,Kode"];
     for (const p of points) {
       lines.push([
         csvEscape(p.name || ""),
         formatNumberForTxt(p.north),
         formatNumberForTxt(p.east),
-        formatNumberForTxt(p.height)
+        formatNumberForTxt(p.height),
+        csvEscape(p.code || "")
       ].join(","));
     }
     return lines.join("\n");
@@ -625,7 +626,8 @@
         name: parsed.rawName,
         north: parsed.n,
         east: parsed.e,
-        height: parsed.h
+        height: parsed.h,
+        code: parsed.code
       };
     }
 
@@ -643,7 +645,8 @@
       name: String(p.name || "").trim(),
       north: p.north != null ? Number(p.north) : null,
       east: p.east != null ? Number(p.east) : null,
-      height: p.height != null ? Number(p.height) : null
+      height: p.height != null ? Number(p.height) : null,
+      code: p.code != null ? String(p.code).trim() : ""
     };
   }
 
@@ -651,7 +654,7 @@
     const seen = new Set();
     const out = [];
     for (const p of points) {
-      const key = `${p.name}|${p.north}|${p.east}|${p.height}`;
+      const key = `${p.name}|${p.north}|${p.east}|${p.height}|${p.code || ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(p);
@@ -708,26 +711,41 @@
   }
 
   function parseKof05Record(line) {
-    const match = String(line || "").trim().match(/^05\s+(.+?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s+(-?\d+(?:[.,]\d+)?)\s*$/);
-    if (!match) return null;
+    const body = String(line || "").trim().replace(/^05\s+/, "");
+    if (!body) return null;
 
-    const descriptor = String(match[1] || "").trim();
-    const fields = descriptor.split(/\s{2,}/).filter(Boolean);
-    let rawName = fields[0] || descriptor;
+    const tokens = body.split(/\s+/).filter(Boolean);
+    if (tokens.length < 3) return null;
 
-    if (fields.length === 1) {
-      const tokens = descriptor.split(/\s+/).filter(Boolean);
-      if (tokens.length >= 3) {
-        rawName = tokens.slice(0, -1).join(" ");
-      }
+    let coordStart = -1;
+    let h = null;
+
+    if (tokens.length >= 4 && isLikelyCoordinate(tokens[tokens.length - 3])) {
+      coordStart = tokens.length - 3;
+      h = parseNumber(tokens[tokens.length - 1]);
+    } else if (isLikelyCoordinate(tokens[tokens.length - 2])) {
+      coordStart = tokens.length - 2;
     }
+
+    if (coordStart < 1) return null;
+
+    const descriptorTokens = tokens.slice(0, coordStart);
+    const codeCandidate = descriptorTokens[descriptorTokens.length - 1] || "";
+    const hasCode = descriptorTokens.length > 1 && /^\d{3,}$/.test(codeCandidate);
+    const rawName = (hasCode ? descriptorTokens.slice(0, -1) : descriptorTokens).join(" ");
 
     return {
       rawName: String(rawName || "").trim(),
-      n: parseNumber(match[2]),
-      e: parseNumber(match[3]),
-      h: parseNumber(match[4])
+      code: hasCode ? codeCandidate : "",
+      n: parseNumber(tokens[coordStart]),
+      e: parseNumber(tokens[coordStart + 1]),
+      h
     };
+  }
+
+  function isLikelyCoordinate(value) {
+    const n = parseNumber(value);
+    return n != null && Math.abs(n) >= 10000;
   }
 
   function kofToLandXml(kofText, options = {}) {
