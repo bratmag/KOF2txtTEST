@@ -966,7 +966,7 @@ async function handleUploadConvertedTxt(body) {
   return jsonResponse(200, {
     ok: false,
     action: "uploadConvertedTxt",
-    error: "Kunne ikke laste opp TXT-filen automatisk.",
+    error: "Kunne ikke laste opp den konverterte filen automatisk.",
     project: { id: projectId, location: projectLocation },
     upload: {
       parentId,
@@ -996,13 +996,31 @@ async function handleListProjectKofFiles(body) {
 async function tryListProjectFilesCandidates({ token, projectId, projectLocation }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
   const regions = await discoverRegions();
-  const searchProbe = await fetchJsonWithBearer(
-    `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.kof&type=file`,
-    token
-  );
-  const searchFiles = searchProbe.ok && searchProbe.json
-    ? normalizeFilesFromAnyResponse(searchProbe.json).filter((f) => f && f.id && isKofName(f.name))
-    : [];
+  const seedDiagnostics = [];
+  const searchFilesByKey = new Map();
+
+  for (const query of [".kof", ".sos", ".sosi"]) {
+    const url = `${base}/search?projectId=${encodeURIComponent(projectId)}&query=${encodeURIComponent(query)}&type=file`;
+    const searchProbe = await fetchJsonWithBearer(url, token);
+    const searchFiles = searchProbe.ok && searchProbe.json
+      ? normalizeFilesFromAnyResponse(searchProbe.json).filter((f) => f && f.id && isSourceFileName(f.name))
+      : [];
+
+    for (const file of searchFiles) {
+      const key = `${file.id}|${file.parentId || ""}|${file.name}`;
+      if (!searchFilesByKey.has(key)) searchFilesByKey.set(key, file);
+    }
+
+    seedDiagnostics.push({
+      name: `search-${query.replace(/^\./, "")}-seed`,
+      url,
+      ok: searchProbe.ok,
+      status: searchProbe.status,
+      preview: shortText(searchProbe.text, 400)
+    });
+  }
+
+  const searchFiles = Array.from(searchFilesByKey.values());
   const seedFolderIds = Array.from(new Set(
     searchFiles
       .map((f) => f.parentId || null)
@@ -1014,16 +1032,7 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
     projectId,
     projectLocation,
     seedFolderIds,
-    initialDiagnostics: [
-      {
-        name: "search-kof-seed",
-        url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.kof&type=file`,
-        ok: searchProbe.ok,
-        status: searchProbe.status,
-        preview: shortText(searchProbe.text, 400),
-        seedFolderIds
-      }
-    ]
+    initialDiagnostics: seedDiagnostics.map((item) => ({ ...item, seedFolderIds }))
   });
 
   if (folderTree.ok && Array.isArray(folderTree.files) && folderTree.files.length) {
@@ -1053,6 +1062,14 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
     {
       name: "search-kof",
       url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.kof&type=file`
+    },
+    {
+      name: "search-sos",
+      url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.sos&type=file`
+    },
+    {
+      name: "search-sosi",
+      url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.sosi&type=file`
     }
   ];
 
@@ -1075,7 +1092,7 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
       if (!res.ok || !res.json) continue;
 
       const files = normalizeFilesFromAnyResponse(res.json)
-        .filter((f) => f && f.id && isKofName(f.name))
+        .filter((f) => f && f.id && isSourceFileName(f.name))
         .sort((a, b) =>
           String(a.name).localeCompare(String(b.name), undefined, {
             sensitivity: "base"
@@ -1128,7 +1145,7 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
   return {
     ok: false,
     action: "listProjectKofFiles",
-    error: "Fant ingen fungerende kandidat for fillisting, eller ingen .kof-filer i prosjektet.",
+    error: "Fant ingen fungerende kandidat for fillisting, eller ingen .kof/.sos-filer i prosjektet.",
     project: { id: projectId, location: projectLocation },
     resolvedBaseUrl: base,
     regionsDiscovered: regions,
@@ -1215,7 +1232,7 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
         }
       }
 
-      if (!item.id || !isKofName(item.name)) continue;
+      if (!item.id || !isSourceFileName(item.name)) continue;
 
       const key = `${item.id}|${item.parentId || ""}|${item.name}`;
       if (!filesByKey.has(key)) {
@@ -1256,8 +1273,8 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
   };
 }
 
-function isKofName(name) {
-  return /\.kof$/i.test(String(name || ""));
+function isSourceFileName(name) {
+  return /\.(kof|sos|sosi)$/i.test(String(name || ""));
 }
 
 function isConvertedOutputName(name) {
@@ -1265,7 +1282,7 @@ function isConvertedOutputName(name) {
 }
 
 function outputBaseName(name) {
-  return String(name || "").replace(/\.(kof|txt|xml)$/i, "").toLowerCase();
+  return String(name || "").replace(/\.(kof|sos|sosi|txt|xml)$/i, "").toLowerCase();
 }
 
 function findExistingConvertedOutputs(file, convertedFiles) {
