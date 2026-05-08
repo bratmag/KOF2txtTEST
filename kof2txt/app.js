@@ -895,7 +895,8 @@
           n: coords[0].n,
           e: coords[0].e,
           h: coords[0].h,
-          code: getSosiObjectCode(current)
+          code: getSosiObjectCode(current),
+          attributes: getSosiObjectAttributes(current)
         });
       }
 
@@ -911,7 +912,8 @@
         }));
         lineFeatures.push({
           pts: linePoints,
-          code: getSosiObjectCode(current)
+          code: getSosiObjectCode(current),
+          attributes: getSosiObjectAttributes(current)
         });
       }
 
@@ -937,6 +939,7 @@
           type: objectMatch[1].toUpperCase(),
           id: cleanSosiObjectId(objectMatch[2]),
           attrs: {},
+          attrList: [],
           coordKey: null,
           coordValues: []
         };
@@ -956,6 +959,10 @@
           current.coordValues.push(...extractSosiNumbers(value));
         } else {
           current.attrs[key] = value;
+          current.attrList.push({
+            label: attrMatch[1].trim(),
+            value
+          });
         }
         continue;
       }
@@ -1033,6 +1040,15 @@
     return attrs.OBJTYPE || attrs.LTEMA || attrs.TEMA || "";
   }
 
+  function getSosiObjectAttributes(object) {
+    return (Array.isArray(object?.attrList) ? object.attrList : [])
+      .filter((attribute) => attribute && attribute.label)
+      .map((attribute) => ({
+        label: String(attribute.label || "").trim(),
+        value: String(attribute.value ?? "").trim()
+      }));
+  }
+
   function dedupeLandXmlPointNames(points) {
     const totals = {};
     for (const point of points) {
@@ -1057,10 +1073,37 @@
     const inner = points.map((point) => {
       const coords = `${formatLandXmlNumber(point.n)} ${formatLandXmlNumber(point.e)} ${formatLandXmlNumber(point.h)}`;
       const name = escapeXml(point.name);
-      return `    <CgPoint name="${name}" desc="${name}" featureRef="Punkter">${coords}</CgPoint>`;
+      const attributesXml = buildLandXmlAttributeFeature(point.attributes, "      ");
+
+      if (!attributesXml) {
+        return `    <CgPoint name="${name}" desc="${name}" featureRef="Punkter">${coords}</CgPoint>`;
+      }
+
+      return [
+        `    <CgPoint name="${name}" desc="${name}" featureRef="Punkter">`,
+        `      ${coords}`,
+        attributesXml,
+        "    </CgPoint>"
+      ].join("\n");
     }).join("\n");
 
     return `  <CgPoints>\n${inner}\n  </CgPoints>`;
+  }
+
+  function buildLandXmlAttributeFeature(attributes, indent = "") {
+    const rows = (Array.isArray(attributes) ? attributes : [])
+      .filter((attribute) => attribute && attribute.label)
+      .map((attribute) =>
+        `${indent}  <Property label="${escapeXml(attribute.label)}" value="${escapeXml(attribute.value ?? "")}" />`
+      );
+
+    if (!rows.length) return "";
+
+    return [
+      `${indent}<Feature code="SOSI">`,
+      ...rows,
+      `${indent}</Feature>`
+    ].join("\n");
   }
 
   function buildLandXmlLayerNames(lines, fileName, options = {}) {
@@ -1095,6 +1138,7 @@
         ? `${layerPrefix}_${fileName}_${rawCode}`
         : `${layerPrefix}_${fileName}_`;
       const layer = escapeXml(rawLayer);
+      const attributesXml = buildLandXmlAttributeFeature(line.attributes, "      ");
       return [
         `    <PlanFeature name="${name}">`,
         "      <CoordGeom>",
@@ -1104,8 +1148,9 @@
         `        <Property label="layer" value="${layer}" />`,
         "        <Property label=\"color\" value=\"144,238,144\" />",
         "      </Feature>",
+        attributesXml,
         "    </PlanFeature>"
-      ].join("\n");
+      ].filter(Boolean).join("\n");
     }).join("\n");
 
     return `  <PlanFeatures>\n${features}\n  </PlanFeatures>`;
