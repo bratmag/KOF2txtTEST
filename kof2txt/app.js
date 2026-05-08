@@ -1073,7 +1073,7 @@
     const inner = points.map((point) => {
       const coords = `${formatLandXmlNumber(point.n)} ${formatLandXmlNumber(point.e)} ${formatLandXmlNumber(point.h)}`;
       const name = escapeXml(point.name);
-      const attributesXml = buildLandXmlAttributeFeature(point.attributes, "      ");
+      const attributesXml = buildLandXmlTrimbleCadFeature(point.attributes, "      ");
 
       if (!attributesXml) {
         return `    <CgPoint name="${name}" desc="${name}" featureRef="Punkter">${coords}</CgPoint>`;
@@ -1090,17 +1090,23 @@
     return `  <CgPoints>\n${inner}\n  </CgPoints>`;
   }
 
-  function buildLandXmlAttributeFeature(attributes, indent = "") {
-    const rows = (Array.isArray(attributes) ? attributes : [])
+  function buildLandXmlPropertyRows(attributes, indent = "") {
+    return (Array.isArray(attributes) ? attributes : [])
       .filter((attribute) => attribute && attribute.label)
       .map((attribute) =>
         `${indent}  <Property label="${escapeXml(attribute.label)}" value="${escapeXml(attribute.value ?? "")}" />`
       );
+  }
 
+  function buildLandXmlTrimbleCadFeature(attributes, indent = "", leadingRows = []) {
+    const rows = [
+      ...(Array.isArray(leadingRows) ? leadingRows : []),
+      ...buildLandXmlPropertyRows(attributes, indent)
+    ];
     if (!rows.length) return "";
 
     return [
-      `${indent}<Feature code="Gemini attributes">`,
+      `${indent}<Feature code="trimbleCADProperties">`,
       ...rows,
       `${indent}</Feature>`
     ].join("\n");
@@ -1138,17 +1144,16 @@
         ? `${layerPrefix}_${fileName}_${rawCode}`
         : `${layerPrefix}_${fileName}_`;
       const layer = escapeXml(rawLayer);
-      const attributesXml = buildLandXmlAttributeFeature(line.attributes, "        ");
+      const trimbleCadXml = buildLandXmlTrimbleCadFeature(line.attributes, "      ", [
+        `        <Property label="layer" value="${layer}" />`,
+        "        <Property label=\"color\" value=\"144,238,144\" />"
+      ]);
       return [
         `    <PlanFeature name="${name}">`,
         "      <CoordGeom>",
         buildLandXmlCoordGeom(line.pts),
-        attributesXml,
         "      </CoordGeom>",
-        "      <Feature code=\"trimbleCADProperties\">",
-        `        <Property label="layer" value="${layer}" />`,
-        "        <Property label=\"color\" value=\"144,238,144\" />",
-        "      </Feature>",
+        trimbleCadXml,
         "    </PlanFeature>"
       ].filter(Boolean).join("\n");
     }).join("\n");
