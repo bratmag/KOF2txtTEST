@@ -779,8 +779,10 @@
     return buildLandXmlDocument(parseSosiForLandXml(sosiText), {
       fileName: options.fileName,
       fallbackName: "SOSI",
-      layerPrefix: "Sosi",
-      author: "sosi2xml"
+      layerPrefix: "Sos",
+      author: "sosi2xml",
+      useLineCodeLayers: true,
+      planFeatureNamePrefix: "Plan feature"
     });
   }
 
@@ -789,6 +791,7 @@
       .replace(/\.(kof|sos|sosi)$/i, "") || options.fallbackName || "KOF";
     const layerPrefix = options.layerPrefix || "Kof";
     const author = options.author || "kof2xml";
+    const lineLayers = buildLandXmlLayerNames(parsed.lines, fileName, options);
     const now = new Date();
     const date = now.toISOString().slice(0, 10);
     const time = now.toISOString().slice(11, 19);
@@ -804,12 +807,14 @@
       "        <Property label=\"lineStyleName\" value=\"Gjennomgående\" />",
       "        <Property label=\"lineWeight\" value=\"0\" />",
       "      </Feature>",
-      "      <Feature code=\"trimbleLayer\">",
-      `        <Property label="name" value="${escapeXml(layerPrefix)}_${escapeXml(fileName)}_" />`,
-      "        <Property label=\"color\" value=\"255,255,255\" />",
-      "        <Property label=\"lineStyleName\" value=\"Gjennomgående\" />",
-      "        <Property label=\"lineWeight\" value=\"0\" />",
-      "      </Feature>",
+      ...lineLayers.map((layerName) => [
+        "      <Feature code=\"trimbleLayer\">",
+        `        <Property label="name" value="${escapeXml(layerName)}" />`,
+        "        <Property label=\"color\" value=\"255,255,255\" />",
+        "        <Property label=\"lineStyleName\" value=\"Gjennomgående\" />",
+        "        <Property label=\"lineWeight\" value=\"0\" />",
+        "      </Feature>"
+      ].join("\n")),
       "    </Feature>",
       "  </Project>",
       "  <Units>",
@@ -820,7 +825,7 @@
       "  </Application>",
       "  <FeatureDictionary name=\"ISO15143-4\" />",
       buildLandXmlCgPoints(parsed.points),
-      buildLandXmlPlanFeatures(parsed.lines, fileName, { layerPrefix }),
+      buildLandXmlPlanFeatures(parsed.lines, fileName, options),
       "</LandXML>"
     ].filter(Boolean).join("\n");
   }
@@ -904,7 +909,6 @@
           h: coord.h,
           code: getSosiObjectCode(current)
         }));
-        points.push(...linePoints);
         lineFeatures.push({
           pts: linePoints,
           code: getSosiObjectCode(current)
@@ -1021,7 +1025,7 @@
 
   function buildSosiPointName(object, fallbackIndex) {
     const id = cleanSosiObjectId(object?.id);
-    return id ? `P${id}` : `P${fallbackIndex}`;
+    return id || String(fallbackIndex);
   }
 
   function getSosiObjectCode(object) {
@@ -1059,13 +1063,38 @@
     return `  <CgPoints>\n${inner}\n  </CgPoints>`;
   }
 
+  function buildLandXmlLayerNames(lines, fileName, options = {}) {
+    const layerPrefix = options.layerPrefix || "Kof";
+    const useLineCodeLayers = !!options.useLineCodeLayers;
+    const fallbackLayer = `${layerPrefix}_${fileName}_`;
+    const names = [];
+
+    for (const line of Array.isArray(lines) ? lines : []) {
+      const code = String(line?.code || "").trim();
+      const layerName = useLineCodeLayers && code
+        ? `${layerPrefix}_${fileName}_${code}`
+        : fallbackLayer;
+      if (!names.includes(layerName)) names.push(layerName);
+    }
+
+    return names.length ? names : [fallbackLayer];
+  }
+
   function buildLandXmlPlanFeatures(lines, fileName, options = {}) {
     if (!lines.length) return "";
     const layerPrefix = options.layerPrefix || "Kof";
+    const useLineCodeLayers = !!options.useLineCodeLayers;
+    const namePrefix = options.planFeatureNamePrefix || "";
 
     const features = lines.map((line, index) => {
-      const name = `${escapeXml(fileName)}_${index + 1}`;
-      const layer = `${escapeXml(layerPrefix)}_${escapeXml(fileName)}_`;
+      const rawCode = String(line?.code || "").trim();
+      const name = namePrefix
+        ? `${escapeXml(namePrefix)} ${index + 1}`
+        : `${escapeXml(fileName)}_${index + 1}`;
+      const rawLayer = useLineCodeLayers && rawCode
+        ? `${layerPrefix}_${fileName}_${rawCode}`
+        : `${layerPrefix}_${fileName}_`;
+      const layer = escapeXml(rawLayer);
       return [
         `    <PlanFeature name="${name}">`,
         "      <CoordGeom>",
