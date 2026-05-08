@@ -991,6 +991,7 @@
   function extractSosiNumbers(value) {
     return String(value || "")
       .split(/\s+/)
+      .filter((part) => String(part || "").trim())
       .map((part) => parseNumber(part))
       .filter((number) => number != null);
   }
