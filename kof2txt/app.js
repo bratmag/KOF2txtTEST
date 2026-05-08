@@ -919,7 +919,7 @@
       const line = String(rawLine || "").trim();
       if (!line) continue;
 
-      const unitMatch = line.match(/^\.\.ENHET\s+(.+)$/i);
+      const unitMatch = line.match(/^\.\.+ENHET\s+(.+)$/i);
       if (unitMatch) {
         const parsedUnit = parseNumber(unitMatch[1]);
         if (parsedUnit != null && parsedUnit > 0) unit = parsedUnit;
@@ -941,7 +941,7 @@
 
       if (!current) continue;
 
-      const attrMatch = line.match(/^\.\.([^\s]+)\s*(.*)$/);
+      const attrMatch = line.match(/^\.\.+([^\s]+)\s*(.*)$/);
       if (attrMatch) {
         const key = attrMatch[1].toUpperCase();
         const value = String(attrMatch[2] || "").trim();
