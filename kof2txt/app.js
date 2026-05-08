@@ -1100,7 +1100,7 @@
     if (!rows.length) return "";
 
     return [
-      `${indent}<Feature code="SOSI">`,
+      `${indent}<Feature code="Gemini attributes">`,
       ...rows,
       `${indent}</Feature>`
     ].join("\n");
@@ -1138,17 +1138,17 @@
         ? `${layerPrefix}_${fileName}_${rawCode}`
         : `${layerPrefix}_${fileName}_`;
       const layer = escapeXml(rawLayer);
-      const attributesXml = buildLandXmlAttributeFeature(line.attributes, "      ");
+      const attributesXml = buildLandXmlAttributeFeature(line.attributes, "        ");
       return [
         `    <PlanFeature name="${name}">`,
         "      <CoordGeom>",
         buildLandXmlCoordGeom(line.pts),
+        attributesXml,
         "      </CoordGeom>",
         "      <Feature code=\"trimbleCADProperties\">",
         `        <Property label="layer" value="${layer}" />`,
         "        <Property label=\"color\" value=\"144,238,144\" />",
         "      </Feature>",
-        attributesXml,
         "    </PlanFeature>"
       ].filter(Boolean).join("\n");
     }).join("\n");
