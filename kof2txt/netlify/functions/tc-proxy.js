@@ -197,7 +197,23 @@ async function fetchTextNoAuth(url) {
 
 function decodeSourceBuffer(buffer) {
   const utf8 = buffer.toString("utf8");
-  return utf8.includes("\uFFFD") ? buffer.toString("latin1") : utf8;
+  return utf8.includes("\uFFFD") ? repairUtf8Mojibake(buffer.toString("latin1")) : utf8;
+}
+
+function repairUtf8Mojibake(text) {
+  return String(text || "")
+    .replace(/\u00c3[\u0098\u02dc]/g, "Ø")
+    .replace(/\u00c3\u00b8/g, "ø")
+    .replace(/\u00c3[\u0085\u2026]/g, "Å")
+    .replace(/\u00c3\u00a5/g, "å")
+    .replace(/\u00c3\u0086/g, "Æ")
+    .replace(/\u00c3\u00a6/g, "æ")
+    .replace(/Ã˜/g, "Ø")
+    .replace(/Ã¸/g, "ø")
+    .replace(/Ã…/g, "Å")
+    .replace(/Ã¥/g, "å")
+    .replace(/Ã†/g, "Æ")
+    .replace(/Ã¦/g, "æ");
 }
 
 function extractPossibleUrl(payload) {

@@ -1011,7 +1011,7 @@
   }
 
   function normalizeSosiKey(key) {
-    return String(key || "")
+    return repairUtf8Mojibake(String(key || ""))
       .toUpperCase()
       .replace(/\u00c6/g, "AE")
       .replace(/\u00d8/g, "O")
@@ -1621,10 +1621,26 @@
     if (!utf8.includes("\uFFFD")) return utf8;
 
     try {
-      return new TextDecoder("windows-1252").decode(buffer);
+      return repairUtf8Mojibake(new TextDecoder("windows-1252").decode(buffer));
     } catch (_err) {
       return utf8;
     }
+  }
+
+  function repairUtf8Mojibake(text) {
+    return String(text || "")
+      .replace(/\u00c3[\u0098\u02dc]/g, "Ø")
+      .replace(/\u00c3\u00b8/g, "ø")
+      .replace(/\u00c3[\u0085\u2026]/g, "Å")
+      .replace(/\u00c3\u00a5/g, "å")
+      .replace(/\u00c3\u0086/g, "Æ")
+      .replace(/\u00c3\u00a6/g, "æ")
+      .replace(/Ã˜/g, "Ø")
+      .replace(/Ã¸/g, "ø")
+      .replace(/Ã…/g, "Å")
+      .replace(/Ã¥/g, "å")
+      .replace(/Ã†/g, "Æ")
+      .replace(/Ã¦/g, "æ");
   }
 
   function onWorkspaceEvent(event, args) {
