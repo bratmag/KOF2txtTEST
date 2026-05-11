@@ -172,7 +172,32 @@ async function fetchWithBearer(url, token, options = {}, timeoutMs = 30000) {
 }
 
 async function fetchTextNoAuth(url) {
-  return fetchRaw(url, { method: "GET" }, 60000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const res = await fetch(url, { method: "GET", signal: controller.signal });
+    const contentType = res.headers.get("content-type") || "";
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const text = decodeSourceBuffer(buffer);
+
+    return {
+      url,
+      ok: res.ok,
+      status: res.status,
+      statusText: res.statusText,
+      contentType,
+      text,
+      json: safeJsonParse(text)
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function decodeSourceBuffer(buffer) {
+  const utf8 = buffer.toString("utf8");
+  return utf8.includes("\uFFFD") ? buffer.toString("latin1") : utf8;
 }
 
 function extractPossibleUrl(payload) {

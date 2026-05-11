@@ -782,7 +782,8 @@
       layerPrefix: "Sos",
       author: "sosi2xml",
       useLineCodeLayers: true,
-      planFeatureNamePrefix: "Plan feature"
+      planFeatureNamePrefix: "Plan feature",
+      lineColor: "0,0,255"
     });
   }
 
@@ -801,12 +802,16 @@
       `<LandXML xmlns="http://www.landxml.org/schema/LandXML-1.2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.landxml.org/schema/LandXML-1.2 http://www.landxml.org/schema/LandXML-1.2/LandXML-1.2.xsd" version="1.2" date="${date}" time="${time}">`,
       "  <Project name=\"\" desc=\"\">",
       "    <Feature code=\"trimbleLayers\">",
-      "      <Feature code=\"trimbleLayer\">",
-      "        <Property label=\"name\" value=\"Punkter\" />",
-      "        <Property label=\"color\" value=\"255,255,255\" />",
-      "        <Property label=\"lineStyleName\" value=\"Gjennomgående\" />",
-      "        <Property label=\"lineWeight\" value=\"0\" />",
-      "      </Feature>",
+      ...(parsed.points.length ? [
+        [
+          "      <Feature code=\"trimbleLayer\">",
+          "        <Property label=\"name\" value=\"Punkter\" />",
+          "        <Property label=\"color\" value=\"255,255,255\" />",
+          "        <Property label=\"lineStyleName\" value=\"Gjennomgående\" />",
+          "        <Property label=\"lineWeight\" value=\"0\" />",
+          "      </Feature>"
+        ].join("\n")
+      ] : []),
       ...lineLayers.map((layerName) => [
         "      <Feature code=\"trimbleLayer\">",
         `        <Property label="name" value="${escapeXml(layerName)}" />`,
@@ -881,11 +886,14 @@
     let coordMode = false;
     let pointIndex = 0;
     let curveIndex = 0;
+    let lastLineFeature = null;
+    let lastCompletedObjectType = null;
 
     function finishObject() {
       if (!current) return;
 
       const coords = buildSosiCoordinates(current.coordValues, current.coordKey, unit);
+      let producedLine = false;
       if (current.type === "PUNKT" && coords.length) {
         pointIndex += 1;
         const name = buildSosiPointName(current, pointIndex);
@@ -900,7 +908,7 @@
         });
       }
 
-      if (current.type === "KURVE" && coords.length >= 2) {
+      if (current.type === "KURVE" && coords.length >= 2 && hasUsableLineGeometry(coords)) {
         curveIndex += 1;
         const linePoints = coords.map((coord, index) => ({
           rawName: `K${curveIndex}_${String(index + 1).padStart(3, "0")}`,
@@ -910,13 +918,22 @@
           h: coord.h,
           code: getSosiObjectCode(current)
         }));
-        lineFeatures.push({
+        lastLineFeature = {
           pts: linePoints,
+          name: getSosiObjectName(current),
           code: getSosiObjectCode(current),
           attributes: getSosiObjectAttributes(current)
-        });
+        };
+        lineFeatures.push(lastLineFeature);
+        producedLine = true;
+      } else if (current.renamePreviousLine && lastLineFeature && getSosiObjectName(current)) {
+        lastLineFeature.name = getSosiObjectName(current);
+        lastLineFeature.attributes = getSosiObjectAttributes(current);
+      } else if (current.type === "KURVE") {
+        lastLineFeature = null;
       }
 
+      lastCompletedObjectType = producedLine ? "KURVE" : current.type;
       current = null;
       coordMode = false;
     }
@@ -932,17 +949,21 @@
         continue;
       }
 
-      const objectMatch = line.match(/^\.(PUNKT|KURVE)\b\s*([^.]*)$/i);
+      const objectMatch = line.match(/^\.(?!\.)(\S+)\s*([^.]*)$/);
       if (objectMatch) {
         finishObject();
-        current = {
-          type: objectMatch[1].toUpperCase(),
-          id: cleanSosiObjectId(objectMatch[2]),
-          attrs: {},
-          attrList: [],
-          coordKey: null,
-          coordValues: []
-        };
+        const objectType = objectMatch[1].toUpperCase();
+        current = /^(PUNKT|KURVE|FLATE|TEKST|SYMBOL)$/i.test(objectType)
+          ? {
+              type: objectType,
+              id: cleanSosiObjectId(objectMatch[2]),
+              attrs: {},
+              attrList: [],
+              coordKey: null,
+              coordValues: [],
+              renamePreviousLine: /^(FLATE|TEKST|SYMBOL)$/i.test(objectType) && lastCompletedObjectType === "KURVE"
+            }
+          : null;
         continue;
       }
 
@@ -956,7 +977,7 @@
 
         if (coordMode) {
           current.coordKey = key;
-          current.coordValues.push(...extractSosiNumbers(value));
+          current.coordValues.push(...extractSosiCoordinateNumbers(value));
         } else {
           current.attrs[key] = value;
           current.attrList.push({
@@ -968,7 +989,7 @@
       }
 
       if (coordMode) {
-        current.coordValues.push(...extractSosiNumbers(line));
+        current.coordValues.push(...extractSosiCoordinateNumbers(line));
       }
     }
 
@@ -1007,6 +1028,11 @@
       .filter((number) => number != null);
   }
 
+  function extractSosiCoordinateNumbers(value) {
+    const coordinatePart = String(value || "").replace(/\s+\.\.\..*$/u, "");
+    return extractSosiNumbers(coordinatePart);
+  }
+
   function buildSosiCoordinates(values, coordKey, unit) {
     const numbers = Array.isArray(values) ? values : [];
     const normalizedKey = normalizeSosiKey(coordKey);
@@ -1024,6 +1050,12 @@
     return coords;
   }
 
+  function hasUsableLineGeometry(coords) {
+    return coords.some((coord, index) =>
+      index > 0 && distance2d(coords[index - 1], coord) > 0
+    );
+  }
+
   function scaleSosiCoordinate(value, unit) {
     const n = Number(value);
     if (!Number.isFinite(n)) return 0;
@@ -1038,6 +1070,10 @@
   function getSosiObjectCode(object) {
     const attrs = object?.attrs || {};
     return attrs.OBJTYPE || attrs.LTEMA || attrs.TEMA || "";
+  }
+
+  function getSosiObjectName(object) {
+    return String(object?.attrs?.OBJTYPE || "").trim();
   }
 
   function getSosiObjectAttributes(object) {
@@ -1134,19 +1170,19 @@
     const layerPrefix = options.layerPrefix || "Kof";
     const useLineCodeLayers = !!options.useLineCodeLayers;
     const namePrefix = options.planFeatureNamePrefix || "";
+    const lineColor = options.lineColor || "144,238,144";
+    const featureNameCounts = {};
 
     const features = lines.map((line, index) => {
       const rawCode = String(line?.code || "").trim();
-      const name = namePrefix
-        ? `${escapeXml(namePrefix)} ${index + 1}`
-        : `${escapeXml(fileName)}_${index + 1}`;
+      const name = buildLandXmlPlanFeatureName(line, index, fileName, namePrefix, featureNameCounts);
       const rawLayer = useLineCodeLayers && rawCode
         ? `${layerPrefix}_${fileName}_${rawCode}`
         : `${layerPrefix}_${fileName}_`;
       const layer = escapeXml(rawLayer);
       const trimbleCadXml = buildLandXmlTrimbleCadFeature(line.attributes, "      ", [
         `        <Property label="layer" value="${layer}" />`,
-        "        <Property label=\"color\" value=\"144,238,144\" />"
+        `        <Property label="color" value="${escapeXml(lineColor)}" />`
       ]);
       return [
         `    <PlanFeature name="${name}">`,
@@ -1159,6 +1195,21 @@
     }).join("\n");
 
     return `  <PlanFeatures>\n${features}\n  </PlanFeatures>`;
+  }
+
+  function buildLandXmlPlanFeatureName(line, index, fileName, namePrefix, featureNameCounts) {
+    const explicitName = String(line?.name || "").trim();
+    if (explicitName) {
+      featureNameCounts[explicitName] = (featureNameCounts[explicitName] || 0) + 1;
+      const count = featureNameCounts[explicitName];
+      return count === 1
+        ? escapeXml(explicitName)
+        : `${escapeXml(explicitName)}(${count})`;
+    }
+
+    return namePrefix
+      ? `${escapeXml(namePrefix)} ${index + 1}`
+      : `${escapeXml(fileName)}_${index + 1}`;
   }
 
   function buildLandXmlCoordGeom(points) {
@@ -1533,7 +1584,7 @@
       if (!file) return;
 
       setStatus(`Konverterer lokal fil ${file.name}...`, "working");
-      const kofText = await file.text();
+      const kofText = await readSourceFileText(file);
       const converted = convertKofFile(kofText || "", file.name || "output.kof");
       const outName = converted.outName;
       state.lastDownloadName = outName;
@@ -1556,6 +1607,23 @@
     } finally {
       if (ui.localFileInput) ui.localFileInput.value = "";
       setBusy(false);
+    }
+  }
+
+  async function readSourceFileText(file) {
+    if (!file?.arrayBuffer) return file?.text ? await file.text() : "";
+    const buffer = await file.arrayBuffer();
+    return decodeSourceText(buffer);
+  }
+
+  function decodeSourceText(buffer) {
+    const utf8 = new TextDecoder("utf-8").decode(buffer);
+    if (!utf8.includes("\uFFFD")) return utf8;
+
+    try {
+      return new TextDecoder("windows-1252").decode(buffer);
+    } catch (_err) {
+      return utf8;
     }
   }
 
