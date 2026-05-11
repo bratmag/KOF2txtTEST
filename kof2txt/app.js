@@ -1035,6 +1035,7 @@
 
     for (const feature of featureBlocks) {
       const featureType = feature.type || "GML";
+      const featureAttributes = getGmlFeatureAttributes(feature);
       const lineBlocks = [
         ...extractXmlBlocks(feature.body, "LineString"),
         ...extractXmlBlocks(feature.body, "LinearRing")
@@ -1055,7 +1056,7 @@
               code: featureType
             })),
             code: featureType,
-            attributes: []
+            attributes: featureAttributes
           });
         }
       }
@@ -1074,7 +1075,7 @@
             e: coords[0].e,
             h: coords[0].h,
             code: featureType,
-            attributes: []
+            attributes: featureAttributes
           });
         }
       }
@@ -1090,17 +1091,42 @@
     const members = [];
     for (const memberMatch of String(xml || "").matchAll(/<(?:[A-Za-z_][\w.-]*:)?featureMember\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?featureMember>/gi)) {
       const memberBody = memberMatch[1] || "";
-      const featureMatch = memberBody.match(/^\s*<((?:[A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*))\b[^>]*>([\s\S]*?)<\/\1>\s*$/);
+      const featureMatch = memberBody.match(/^\s*<((?:[A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*))\b([^>]*)>([\s\S]*?)<\/\1>\s*$/);
       if (featureMatch) {
         members.push({
           type: localXmlName(featureMatch[2]),
-          body: featureMatch[3] || ""
+          attrsText: featureMatch[3] || "",
+          body: featureMatch[4] || ""
         });
       } else {
         members.push({ type: "GML", body: memberBody });
       }
     }
     return members;
+  }
+
+  function getGmlFeatureAttributes(feature) {
+    const attributes = [];
+    const idMatch = String(feature?.attrsText || "").match(/\b(?:gml:)?id\s*=\s*["']([^"']+)["']/i);
+    if (idMatch) {
+      attributes.push({
+        label: "gml:id",
+        value: decodeXmlText(idMatch[1])
+      });
+    }
+
+    for (const childMatch of String(feature?.body || "").matchAll(/<((?:[^\s<>/:]+:)?([^\s<>/]+))(?=[\s>/])[^>]*>([\s\S]*?)<\/\1>/g)) {
+      const rawValue = childMatch[3] || "";
+      if (/<[^>]+>/.test(rawValue)) continue;
+      const value = decodeXmlText(rawValue);
+      if (!value) continue;
+      attributes.push({
+        label: localXmlName(childMatch[2]),
+        value
+      });
+    }
+
+    return attributes;
   }
 
   function extractXmlBlocks(xml, localName) {
@@ -1157,6 +1183,21 @@
 
   function stripXmlTags(value) {
     return String(value || "").replace(/<[^>]*>/g, " ");
+  }
+
+  function decodeXmlText(value) {
+    return repairUtf8Mojibake(String(value || ""))
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+      .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_match, number) => String.fromCodePoint(parseInt(number, 10)))
+      .replace(/&quot;/g, "\"")
+      .replace(/&apos;/g, "'")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&")
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function localXmlName(name) {
