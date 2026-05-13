@@ -1008,7 +1008,7 @@
   }
 
   function buildIfcRectangularPipeSolids(addEntity, coords, dims) {
-    const profile = addEntity(`IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.odM / 2)},${formatIfcNumber(dims.odM / 2)},${formatIfcNumber(dims.thkM)},$,$);`);
+    const profile = addEntity(`IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.odM)},${formatIfcNumber(dims.odM)},${formatIfcNumber(dims.thkM)},$,$);`);
     const solidRefs = [];
     for (let index = 0; index < coords.length - 1; index += 1) {
       const p0 = coords[index];
