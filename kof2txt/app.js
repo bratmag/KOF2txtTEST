@@ -8,6 +8,7 @@
     PROXY_URL: "/.netlify/functions/tc-proxy",
     APP_TITLE: "KOFConverter-TEST",
     AUTO_CONVERT_ON_OPEN: true,
+    IFC_POINT_OBJECT_HEIGHT_M: 1,
     MENU_MAIN_COMMAND: "KOF2TXT_TEST_MAIN",
     MENU_OPEN_COMMAND: "KOF2TXT_TEST_OPEN"
   };
@@ -857,6 +858,40 @@
     "LETRA", "LETRE", "LETREMKAB", "VLU", "VLP", "VLSPR", "LEVAR"
   ]);
 
+  const IFC_POINT_PRODUCT_TYPES = {
+    ANB: "IFCPIPEFITTING",
+    BFD: "IFCTANK",
+    DIV: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    FORAKONSTR: "IFCBUILDINGELEMENTPROXY",
+    GRN: "IFCPIPEFITTING",
+    GUT: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    HYD: "IFCFIRESUPPRESSIONTERMINAL",
+    INB: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    INR: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    INT: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    KONSTROMRIS: "IFCBUILDINGELEMENTPROXY",
+    KOTREKUM: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    KRN: "IFCVALVE",
+    KUM: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    LOK: "IFCCOVERING",
+    OVL: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    PMK: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    RED: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    SAN: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    SANI: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    SEP: "IFCTANK",
+    SLG: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    SLI: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    SLS: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    SLU: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    SPR: "IFCFIRESUPPRESSIONTERMINAL",
+    TNK: "IFCTANK",
+    TOKSTVL: "IFCPUMP",
+    TOP: "IFCANNOTATION",
+    UTS: "IFCDISTRIBUTIONCHAMBERELEMENT",
+    VPK: "IFCVALVE"
+  };
+
   function buildIfc(objects, options = {}) {
     const schema = options.version === "IFC2X3" || options.version === "IFC4X3" ? options.version : "IFC4";
     const timestamp = new Date().toISOString().slice(0, 19);
@@ -904,7 +939,7 @@
     addEntity(`IFCRELAGGREGATES('${ifcGuid()}',#${owner},$,$,#${site},(#${building}));`);
     addEntity(`IFCRELAGGREGATES('${ifcGuid()}',#${owner},$,$,#${building},(#${storey}));`);
 
-    const stats = { points: 0, curves: 0, solids: 0, pipes: 0, geom: 0, entities: 0 };
+    const stats = { points: 0, pointObjects: 0, curves: 0, solids: 0, pipes: 0, geom: 0, entities: 0 };
 
     for (const [index, object] of (Array.isArray(objects) ? objects : []).entries()) {
       const guid = ifcGuid();
@@ -916,13 +951,16 @@
       let element;
 
       if (object.geom === "point" && coords.length) {
-        const point = addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coords[0][0])},${formatIfcNumber(coords[0][1])},${formatIfcNumber(coords[0][2])}));`);
-        const gset = addEntity(`IFCGEOMETRICSET((#${point}));`);
-        const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Annotation','GeometricSet',(#${gset}));`);
-        const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
-        shapeRef = `#${shape}`;
-        element = addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','SurveyPoint',#${placement},${shapeRef});`);
-        stats.points += 1;
+        const pointDims = getIfcPointObjectDims(object.props || {});
+        const productType = getIfcPointProductType(object);
+        if (pointDims && productType !== "IFCANNOTATION") {
+          element = buildIfcPointObject(addEntity, context, placement, owner, guid, name, desc, coords[0], pointDims, productType, zAxis, xAxis, extrusionDir);
+          stats.pointObjects += 1;
+          stats.solids += 1;
+        } else {
+          element = buildIfcPointAnnotation(addEntity, context, owner, guid, name, desc, placement, coords[0]);
+          stats.points += 1;
+        }
         stats.geom += 1;
       } else if (object.geom === "curve" && isIfcPipeCandidate(object)) {
         const dims = getIfcPipeDims(object.props || {});
@@ -984,6 +1022,48 @@
     addRaw("END-ISO-10303-21;");
     stats.entities = counter - 1;
     return { text: lines.join("\n"), stats };
+  }
+
+  function buildIfcPointAnnotation(addEntity, context, owner, guid, name, desc, placement, coord) {
+    const point = addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coord[0])},${formatIfcNumber(coord[1])},${formatIfcNumber(coord[2])}));`);
+    const gset = addEntity(`IFCGEOMETRICSET((#${point}));`);
+    const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Annotation','GeometricSet',(#${gset}));`);
+    const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+    return addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','SurveyPoint',#${placement},#${shape});`);
+  }
+
+  function buildIfcPointObject(addEntity, context, placement, owner, guid, name, desc, coord, dims, productType, zAxis, xAxis, extrusionDir) {
+    const profile = buildIfcPointObjectProfile(addEntity, dims);
+    const baseZ = getIfcPointObjectBaseZ(dims.props || {}, coord[2], dims.heightM);
+    const basePoint = addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coord[0])},${formatIfcNumber(coord[1])},${formatIfcNumber(baseZ)}));`);
+    const solidAxis = addEntity(`IFCAXIS2PLACEMENT3D(#${basePoint},#${zAxis},#${xAxis});`);
+    const solid = addEntity(`IFCEXTRUDEDAREASOLID(#${profile},#${solidAxis},#${extrusionDir},${formatIfcNumber(dims.heightM)});`);
+    const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Body','SweptSolid',(#${solid}));`);
+    const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+    return addIfcProductElement(addEntity, productType, guid, owner, name, desc, placement, `#${shape}`);
+  }
+
+  function buildIfcPointObjectProfile(addEntity, dims) {
+    if (dims.shape === "circle") {
+      if (dims.thkM > 0) {
+        return addEntity(`IFCCIRCLEHOLLOWPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.outerDiameterM / 2)},${formatIfcNumber(dims.thkM)});`);
+      }
+      return addEntity(`IFCCIRCLEPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.outerDiameterM / 2)});`);
+    }
+    if (dims.thkM > 0) {
+      return addEntity(`IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.outerWidthM)},${formatIfcNumber(dims.outerLengthM)},${formatIfcNumber(dims.thkM)},$,$);`);
+    }
+    return addEntity(`IFCRECTANGLEPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.outerWidthM)},${formatIfcNumber(dims.outerLengthM)});`);
+  }
+
+  function addIfcProductElement(addEntity, productType, guid, owner, name, desc, placement, shapeRef) {
+    if (productType === "IFCBUILDINGELEMENTPROXY") {
+      return addEntity(`IFCBUILDINGELEMENTPROXY('${guid}',#${owner},'${name}','${desc}',$,#${placement},${shapeRef},$,.ELEMENT.);`);
+    }
+    if (productType === "IFCANNOTATION") {
+      return addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','SurveyPoint',#${placement},${shapeRef});`);
+    }
+    return addEntity(`${productType}('${guid}',#${owner},'${name}','${desc}',$,#${placement},${shapeRef},$,.NOTDEFINED.);`);
   }
 
   function buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords) {
@@ -1053,6 +1133,53 @@
     addEntity(`IFCRELDEFINESBYPROPERTIES('${ifcGuid()}',#${owner},$,$,(#${element}),#${pset});`);
   }
 
+  function getIfcPointProductType(object) {
+    const code = normalizeIfcCode(object?.type || getIfcProp(object?.props || {}, ["OBJTYPE", "Type", "Navn"]));
+    return IFC_POINT_PRODUCT_TYPES[code] || (getIfcPointObjectDims(object?.props || {}) ? "IFCBUILDINGELEMENTPROXY" : "IFCANNOTATION");
+  }
+
+  function getIfcPointObjectDims(props) {
+    const kumform = normalizeIfcToken(getIfcProp(props, ["Kumform"]));
+    const widthMm = firstNumber(getIfcProp(props, ["Bredde"]));
+    const lengthMm = firstNumber(getIfcProp(props, ["Lengde"]));
+    if (!kumform || (widthMm == null && lengthMm == null)) return null;
+
+    const thkMm = Math.max(0, firstNumber(getIfcProp(props, ["Tykkelse"])) || 0);
+    const insideOutside = normalizeIfcToken(getIfcProp(props, ["InnvendigUtvendig"]));
+    const usesInside = insideOutside.startsWith("ID") || insideOutside.includes("INNVENDIG");
+    const shape = kumform.startsWith("R") ? "circle" : "rect";
+    const baseWidthMm = Math.max(0, widthMm ?? lengthMm ?? 0);
+    const baseLengthMm = Math.max(0, lengthMm ?? baseWidthMm);
+    if (baseWidthMm <= 0 || baseLengthMm <= 0) return null;
+
+    const outerWidthMm = usesInside ? baseWidthMm + 2 * thkMm : baseWidthMm;
+    const outerLengthMm = usesInside ? baseLengthMm + 2 * thkMm : baseLengthMm;
+    return {
+      shape,
+      outerDiameterM: outerWidthMm / 1000,
+      outerWidthM: outerWidthMm / 1000,
+      outerLengthM: (kumform === "FK" || kumform === "F") ? outerWidthMm / 1000 : outerLengthMm / 1000,
+      thkM: thkMm / 1000,
+      heightM: getIfcPointObjectHeight(props),
+      props
+    };
+  }
+
+  function getIfcPointObjectHeight(props) {
+    const heightMm = firstNumber(getIfcProp(props, ["Høyde", "Hoyde", "VertikalDimensjon", "Vertikal dimensjon"]));
+    if (heightMm != null && heightMm > 0) return heightMm / 1000;
+    return CONFIG.IFC_POINT_OBJECT_HEIGHT_M;
+  }
+
+  function getIfcPointObjectBaseZ(props, measuredZ, heightM) {
+    const reference = normalizeIfcToken(getIfcProp(props, ["Høydereferanse", "Hoydereferanse"]));
+    const slabM = firstNumber(getIfcProp(props, ["Avst_BunnInnvUnderUtv"])) || 0;
+    if (reference.includes("TOPP") || reference.includes("OVERKANT")) return measuredZ - heightM;
+    if (reference.includes("SENTER")) return measuredZ - heightM / 2;
+    if (reference.includes("BUNN_INNVENDIG")) return measuredZ - slabM;
+    return measuredZ;
+  }
+
   function getIfcPipeDims(props) {
     const dimMm = firstNumber(getIfcProp(props, ["Dimensjon"]));
     if (dimMm == null || dimMm <= 0) return null;
@@ -1082,7 +1209,7 @@
   }
 
   function isIfcPipeCandidate(object) {
-    const code = String(object?.type || "").toUpperCase();
+    const code = normalizeIfcCode(object?.type || "");
     if (IFC_PIPE_TYPES.has(code)) return true;
     const props = object?.props || {};
     return getIfcProp(props, ["Dimensjon"]) != null &&
@@ -1097,10 +1224,36 @@
     return undefined;
   }
 
+  function normalizeIfcCode(value) {
+    return normalizeIfcToken(value).replace(/\s+.*/, "");
+  }
+
+  function normalizeIfcToken(value) {
+    return repairUtf8Mojibake(String(value || ""))
+      .toUpperCase()
+      .replace(/Ã†/g, "AE")
+      .replace(/Ã˜/g, "O")
+      .replace(/Ã…/g, "A")
+      .replace(/Æ/g, "AE")
+      .replace(/Ø/g, "O")
+      .replace(/Å/g, "A")
+      .replace(/[?\ufffd]/g, "O")
+      .replace(/[^A-Z0-9_]+/g, " ")
+      .trim();
+  }
+
   function normalizeIfcPropKey(key) {
     return repairUtf8Mojibake(String(key || ""))
       .toLowerCase()
+      .replace(/Ãƒâ€ /g, "ae")
+      .replace(/ÃƒËœ/g, "o")
+      .replace(/Ãƒâ€¦/g, "a")
+      .replace(/Ã†/g, "ae")
+      .replace(/Ã˜/g, "o")
+      .replace(/Ã…/g, "a")
+      .replace(/[Ã¦Ã¸Ã¥]/g, (char) => ({ "Ã¦": "ae", "Ã¸": "o", "Ã¥": "a" }[char]))
       .replace(/[æøå]/g, (char) => ({ "æ": "ae", "ø": "o", "å": "a" }[char]))
+      .replace(/[?\ufffd]/g, "o")
       .replace(/[^a-z0-9]/g, "");
   }
 
