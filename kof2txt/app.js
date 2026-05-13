@@ -940,7 +940,7 @@
     addEntity(`IFCRELAGGREGATES('${ifcGuid()}',#${owner},$,$,#${site},(#${building}));`);
     addEntity(`IFCRELAGGREGATES('${ifcGuid()}',#${owner},$,$,#${building},(#${storey}));`);
 
-    const stats = { points: 0, pointObjects: 0, curves: 0, solids: 0, pipes: 0, geom: 0, entities: 0 };
+    const stats = { points: 0, pointObjects: 0, curves: 0, solids: 0, pipes: 0, referenceAnnotations: 0, geom: 0, entities: 0 };
 
     for (const [index, object] of (Array.isArray(objects) ? objects : []).entries()) {
       const guid = ifcGuid();
@@ -950,6 +950,7 @@
       const placement = addEntity(`IFCLOCALPLACEMENT($,#${axis3d});`);
       let shapeRef = "$";
       let element;
+      let addReferenceAnnotation = false;
 
       if (object.geom === "point" && coords.length) {
         const pointDims = getIfcPointObjectDims(object.props || {});
@@ -958,6 +959,7 @@
           element = buildIfcPointObject(addEntity, context, placement, owner, guid, name, desc, coords[0], pointDims, productType, zAxis, xAxis, extrusionDir);
           stats.pointObjects += 1;
           stats.solids += 1;
+          addReferenceAnnotation = true;
         } else {
           element = buildIfcPointAnnotation(addEntity, context, owner, guid, name, desc, placement, coords[0]);
           stats.points += 1;
@@ -988,6 +990,7 @@
           stats.pipes += 1;
           stats.solids += 1;
           stats.geom += 1;
+          addReferenceAnnotation = true;
         } else {
           element = buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
           stats.curves += 1;
@@ -997,11 +1000,13 @@
         element = buildIfcCurveFallbackSolid(addEntity, context, placement, owner, guid, name, desc, coords, CONFIG.IFC_FALLBACK_LINE_RADIUS_M);
         stats.solids += 1;
         stats.geom += 1;
+        addReferenceAnnotation = true;
       } else if (object.geom === "polygon" && coords.length >= 4) {
         if (options.solidMode !== false) {
           element = buildIfcPolygonSolid(addEntity, context, placement, owner, guid, name, desc, coords, options.extrusionHeight || 3, zAxis, xAxis, extrusionDir);
           stats.solids += 1;
           stats.geom += 1;
+          addReferenceAnnotation = true;
         } else {
           element = buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
           stats.curves += 1;
@@ -1013,6 +1018,13 @@
 
       elementRefs.push(`#${element}`);
       addIfcProperties(addEntity, owner, element, object.props || {});
+      if (addReferenceAnnotation) {
+        const refPlacement = addEntity(`IFCLOCALPLACEMENT($,#${axis3d});`);
+        const refName = ifcString(`${object.props?.name || object.props?.Name || object.id || `Objekt_${index + 1}`} referanse`).slice(0, 255);
+        const refElement = buildIfcReferenceAnnotation(addEntity, context, owner, ifcGuid(), refName, "Original GML-geometri", refPlacement, object.geom, coords);
+        elementRefs.push(`#${refElement}`);
+        stats.referenceAnnotations += 1;
+      }
     }
 
     if (elementRefs.length) {
@@ -1031,6 +1043,16 @@
     const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Annotation','GeometricSet',(#${gset}));`);
     const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
     return addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','SurveyPoint',#${placement},#${shape});`);
+  }
+
+  function buildIfcReferenceAnnotation(addEntity, context, owner, guid, name, desc, placement, geom, coords) {
+    if (geom === "point" && coords.length) {
+      return buildIfcPointAnnotation(addEntity, context, owner, guid, name, desc, placement, coords[0]);
+    }
+    if ((geom === "curve" || geom === "polygon") && coords.length >= 2) {
+      return buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
+    }
+    return addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','Original GML geometry',#${placement},$);`);
   }
 
   function buildIfcPointObject(addEntity, context, placement, owner, guid, name, desc, coord, dims, productType, zAxis, xAxis, extrusionDir) {
