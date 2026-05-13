@@ -9,6 +9,7 @@
     APP_TITLE: "KOFConverter-TEST",
     AUTO_CONVERT_ON_OPEN: true,
     IFC_POINT_OBJECT_HEIGHT_M: 1,
+    IFC_FALLBACK_LINE_RADIUS_M: 0.05,
     MENU_MAIN_COMMAND: "KOF2TXT_TEST_MAIN",
     MENU_OPEN_COMMAND: "KOF2TXT_TEST_OPEN"
   };
@@ -993,8 +994,8 @@
           stats.geom += 1;
         }
       } else if (object.geom === "curve" && coords.length >= 2) {
-        element = buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
-        stats.curves += 1;
+        element = buildIfcCurveFallbackSolid(addEntity, context, placement, owner, guid, name, desc, coords, CONFIG.IFC_FALLBACK_LINE_RADIUS_M);
+        stats.solids += 1;
         stats.geom += 1;
       } else if (object.geom === "polygon" && coords.length >= 4) {
         if (options.solidMode !== false) {
@@ -1074,6 +1075,15 @@
     return addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','Annotation curve',#${placement},#${shape});`);
   }
 
+  function buildIfcCurveFallbackSolid(addEntity, context, placement, owner, guid, name, desc, coords, radiusM) {
+    const pointRefs = coords.map((coord) => `#${addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coord[0])},${formatIfcNumber(coord[1])},${formatIfcNumber(coord[2])}));`)}`);
+    const polyline = addEntity(`IFCPOLYLINE((${pointRefs.join(",")}));`);
+    const solid = addEntity(`IFCSWEPTDISKSOLID(#${polyline},${formatIfcNumber(radiusM)},$,$,$);`);
+    const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Body','SweptSolid',(#${solid}));`);
+    const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+    return addEntity(`IFCBUILDINGELEMENTPROXY('${guid}',#${owner},'${name}','${desc}',$,#${placement},#${shape},$,.ELEMENT.);`);
+  }
+
   function buildIfcPolygonSolid(addEntity, context, placement, owner, guid, name, desc, coords, extrusionHeight, zAxis, xAxis, extrusionDir) {
     const ring = coords.slice(0, -1);
     const pointRefs = ring.map((coord) => `#${addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coord[0])},${formatIfcNumber(coord[1])}));`)}`);
@@ -1090,7 +1100,7 @@
   }
 
   function buildIfcRectangularPipeSolids(addEntity, coords, dims) {
-    const profile = addEntity(`IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.odM)},${formatIfcNumber(dims.odM)},${formatIfcNumber(dims.thkM)},$,$);`);
+    const profile = addEntity(`IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.heightM)},${formatIfcNumber(dims.widthM)},${formatIfcNumber(dims.thkM)},$,$);`);
     const solidRefs = [];
     for (let index = 0; index < coords.length - 1; index += 1) {
       const p0 = coords[index];
@@ -1196,21 +1206,29 @@
     const dimMm = firstNumber(getIfcProp(props, ["Dimensjon"]));
     if (dimMm == null || dimMm <= 0) return null;
     const thkMm = firstNumber(getIfcProp(props, ["Tykkelse"])) || 0;
+    const verticalDimMm = firstNumber(getIfcProp(props, ["VertikalDimensjon", "Vertikal dimensjon"]));
     const insideOutside = String(getIfcProp(props, ["InnvendigUtvendig"]) || "").toUpperCase();
     const usesInsideDiameter = insideOutside.startsWith("ID") || insideOutside.includes("INNVENDIG");
-    const idMm = usesInsideDiameter ? dimMm : Math.max(0, dimMm - 2 * thkMm);
-    const odMm = usesInsideDiameter ? dimMm + 2 * thkMm : dimMm;
     const pipeShape = String(getIfcProp(props, ["Rørform", "Rorform"]) || "").toUpperCase();
     const shapeToken = pipeShape.split(/\s+/)[0];
     const shape = shapeToken === "F" || pipeShape.includes("FIRKANT")
       ? "rect"
       : shapeToken === "S" || pipeShape.includes("SIRK")
         ? "circle"
-        : null;
+        : "rect";
+    const innerWidthMm = usesInsideDiameter ? dimMm : Math.max(0, dimMm - 2 * thkMm);
+    const outerWidthMm = usesInsideDiameter ? dimMm + 2 * thkMm : dimMm;
+    const inputHeightMm = verticalDimMm != null && verticalDimMm > 0 ? verticalDimMm : dimMm;
+    const innerHeightMm = usesInsideDiameter ? inputHeightMm : Math.max(0, inputHeightMm - 2 * thkMm);
+    const outerHeightMm = usesInsideDiameter ? inputHeightMm + 2 * thkMm : inputHeightMm;
     if (!shape) return null;
     return {
-      odM: odMm / 1000,
-      idM: idMm / 1000,
+      odM: outerWidthMm / 1000,
+      idM: innerWidthMm / 1000,
+      widthM: outerWidthMm / 1000,
+      heightM: outerHeightMm / 1000,
+      innerWidthM: innerWidthMm / 1000,
+      innerHeightM: innerHeightMm / 1000,
       thkM: thkMm / 1000,
       shape
     };
@@ -1218,11 +1236,13 @@
 
   function getIfcZOffsetToCenter(props, dims) {
     const reference = String(getIfcProp(props, ["Høydereferanse", "Hoydereferanse"]) || "").toUpperCase();
-    if (reference.includes("BUNN_INNVENDIG") || reference.includes("UNDERKANT_INNVENDIG")) return dims.idM / 2;
-    if (reference.includes("BUNN_UTVENDIG") || reference.includes("UNDERKANT_UTVENDIG")) return dims.odM / 2;
-    if (reference.includes("TOPP_INNVENDIG") || reference.includes("OVERKANT_INNVENDIG")) return -dims.idM / 2;
-    if (reference.includes("TOPP_UTVENDIG") || reference.includes("OVERKANT_UTVENDIG")) return -dims.odM / 2;
-    if (reference.includes("PÅ_BAKKEN") || reference.includes("PA_BAKKEN")) return dims.odM / 2;
+    const outerVerticalM = dims.shape === "rect" ? dims.heightM : dims.odM;
+    const innerVerticalM = dims.shape === "rect" ? dims.innerHeightM : dims.idM;
+    if (reference.includes("BUNN_INNVENDIG") || reference.includes("UNDERKANT_INNVENDIG")) return innerVerticalM / 2;
+    if (reference.includes("BUNN_UTVENDIG") || reference.includes("UNDERKANT_UTVENDIG")) return outerVerticalM / 2;
+    if (reference.includes("TOPP_INNVENDIG") || reference.includes("OVERKANT_INNVENDIG")) return -innerVerticalM / 2;
+    if (reference.includes("TOPP_UTVENDIG") || reference.includes("OVERKANT_UTVENDIG")) return -outerVerticalM / 2;
+    if (reference.includes("PÅ_BAKKEN") || reference.includes("PA_BAKKEN")) return outerVerticalM / 2;
     return 0;
   }
 
