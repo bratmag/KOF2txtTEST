@@ -852,7 +852,9 @@
   const IFC_PIPE_TYPES = new Set([
     "DR", "SP", "OV", "AF", "VL", "TL", "LL",
     "LETREUKAB", "LETREUVANN", "LETREUDREN",
-    "KAB", "EL", "TEL"
+    "KAB", "EL", "TEL",
+    "LEKU", "OVS", "SPP", "SPS", "LESPUNT", "LESTIKKB",
+    "LETRA", "LETRE", "LETREMKAB", "VLU", "VLP", "VLSPR", "LEVAR"
   ]);
 
   function buildIfc(objects, options = {}) {
@@ -922,7 +924,7 @@
         element = addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','SurveyPoint',#${placement},${shapeRef});`);
         stats.points += 1;
         stats.geom += 1;
-      } else if (object.geom === "curve" && IFC_PIPE_TYPES.has(String(object.type || "").toUpperCase())) {
+      } else if (object.geom === "curve" && isIfcPipeCandidate(object)) {
         const dims = getIfcPipeDims(object.props || {});
         if (dims) {
           const offset = getIfcZOffsetToCenter(object.props || {}, dims);
@@ -1040,7 +1042,7 @@
   }
 
   function addIfcProperties(addEntity, owner, element, props) {
-    const entries = Object.entries(props || {}).filter(([key]) => key !== "gml:id").slice(0, 30);
+    const entries = Object.entries(props || {}).filter(([key]) => key !== "gml:id");
     if (!entries.length) return;
     const propertyRefs = [];
     for (const [key, value] of entries) {
@@ -1052,14 +1054,14 @@
   }
 
   function getIfcPipeDims(props) {
-    const dimMm = firstNumber(props.Dimensjon);
+    const dimMm = firstNumber(getIfcProp(props, ["Dimensjon"]));
     if (dimMm == null || dimMm <= 0) return null;
-    const thkMm = firstNumber(props.Tykkelse) || 0;
-    const insideOutside = String(props.InnvendigUtvendig || "").toUpperCase();
+    const thkMm = firstNumber(getIfcProp(props, ["Tykkelse"])) || 0;
+    const insideOutside = String(getIfcProp(props, ["InnvendigUtvendig"]) || "").toUpperCase();
     const usesInsideDiameter = insideOutside.startsWith("ID") || insideOutside.includes("INNVENDIG");
     const idMm = usesInsideDiameter ? dimMm : Math.max(0, dimMm - 2 * thkMm);
     const odMm = usesInsideDiameter ? dimMm + 2 * thkMm : dimMm;
-    const pipeShape = String(props.Rørform || props.Rorform || "").toUpperCase();
+    const pipeShape = String(getIfcProp(props, ["Rørform", "Rorform"]) || "").toUpperCase();
     const shapeToken = pipeShape.split(/\s+/)[0];
     return {
       odM: odMm / 1000,
@@ -1070,12 +1072,36 @@
   }
 
   function getIfcZOffsetToCenter(props, dims) {
-    const reference = String(props.Høydereferanse || props.Hoydereferanse || "").toUpperCase();
+    const reference = String(getIfcProp(props, ["Høydereferanse", "Hoydereferanse"]) || "").toUpperCase();
     if (reference.includes("BUNN_INNVENDIG") || reference.includes("UNDERKANT_INNVENDIG")) return dims.idM / 2;
     if (reference.includes("BUNN_UTVENDIG") || reference.includes("UNDERKANT_UTVENDIG")) return dims.odM / 2;
     if (reference.includes("TOPP_INNVENDIG") || reference.includes("OVERKANT_INNVENDIG")) return -dims.idM / 2;
     if (reference.includes("TOPP_UTVENDIG") || reference.includes("OVERKANT_UTVENDIG")) return -dims.odM / 2;
+    if (reference.includes("PÅ_BAKKEN") || reference.includes("PA_BAKKEN")) return dims.odM / 2;
     return 0;
+  }
+
+  function isIfcPipeCandidate(object) {
+    const code = String(object?.type || "").toUpperCase();
+    if (IFC_PIPE_TYPES.has(code)) return true;
+    const props = object?.props || {};
+    return getIfcProp(props, ["Dimensjon"]) != null &&
+      getIfcProp(props, ["Rørform", "Rorform"]) != null;
+  }
+
+  function getIfcProp(props, aliases) {
+    const normalizedAliases = new Set((Array.isArray(aliases) ? aliases : [aliases]).map(normalizeIfcPropKey));
+    for (const [key, value] of Object.entries(props || {})) {
+      if (normalizedAliases.has(normalizeIfcPropKey(key))) return value;
+    }
+    return undefined;
+  }
+
+  function normalizeIfcPropKey(key) {
+    return repairUtf8Mojibake(String(key || ""))
+      .toLowerCase()
+      .replace(/[æøå]/g, (char) => ({ "æ": "ae", "ø": "o", "å": "a" }[char]))
+      .replace(/[^a-z0-9]/g, "");
   }
 
   function firstNumber(value) {
