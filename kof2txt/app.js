@@ -1071,10 +1071,10 @@
 
   function getIfcZOffsetToCenter(props, dims) {
     const reference = String(props.Høydereferanse || props.Hoydereferanse || "").toUpperCase();
-    if (reference.includes("BUNN_INNVENDIG")) return dims.idM / 2;
-    if (reference.includes("BUNN_UTVENDIG")) return dims.odM / 2;
-    if (reference.includes("TOPP_INNVENDIG")) return -dims.idM / 2;
-    if (reference.includes("TOPP_UTVENDIG")) return -dims.odM / 2;
+    if (reference.includes("BUNN_INNVENDIG") || reference.includes("UNDERKANT_INNVENDIG")) return dims.idM / 2;
+    if (reference.includes("BUNN_UTVENDIG") || reference.includes("UNDERKANT_UTVENDIG")) return dims.odM / 2;
+    if (reference.includes("TOPP_INNVENDIG") || reference.includes("OVERKANT_INNVENDIG")) return -dims.idM / 2;
+    if (reference.includes("TOPP_UTVENDIG") || reference.includes("OVERKANT_UTVENDIG")) return -dims.odM / 2;
     return 0;
   }
 
