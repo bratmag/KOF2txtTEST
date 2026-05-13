@@ -1042,7 +1042,7 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
   const seedDiagnostics = [];
   const searchFilesByKey = new Map();
 
-  for (const query of [".kof", ".sos", ".sosi", ".gml"]) {
+  for (const query of [".kof", ".sos", ".sosi", ".gml", ".jxl"]) {
     const url = `${base}/search?projectId=${encodeURIComponent(projectId)}&query=${encodeURIComponent(query)}&type=file`;
     const searchProbe = await fetchJsonWithBearer(url, token);
     const searchFiles = searchProbe.ok && searchProbe.json
@@ -1117,6 +1117,10 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
     {
       name: "search-gml",
       url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.gml&type=file`
+    },
+    {
+      name: "search-jxl",
+      url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.jxl&type=file`
     }
   ];
 
@@ -1192,7 +1196,7 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
   return {
     ok: false,
     action: "listProjectKofFiles",
-    error: "Fant ingen fungerende kandidat for fillisting, eller ingen .kof/.sos/.gml-filer i prosjektet.",
+    error: "Fant ingen fungerende kandidat for fillisting, eller ingen .kof/.sos/.gml/.jxl-filer i prosjektet.",
     project: { id: projectId, location: projectLocation },
     resolvedBaseUrl: base,
     regionsDiscovered: regions,
@@ -1321,7 +1325,7 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
 }
 
 function isSourceFileName(name) {
-  return /\.(kof|sos|sosi|gml)$/i.test(String(name || ""));
+  return /\.(kof|sos|sosi|gml|jxl)$/i.test(String(name || ""));
 }
 
 function isConvertedOutputName(name) {
@@ -1329,7 +1333,7 @@ function isConvertedOutputName(name) {
 }
 
 function outputBaseName(name) {
-  return String(name || "").replace(/\.(kof|sos|sosi|gml|txt|xml|ifc)$/i, "").toLowerCase();
+  return String(name || "").replace(/\.(kof|sos|sosi|gml|jxl|txt|xml|ifc)$/i, "").toLowerCase();
 }
 
 function findExistingConvertedOutputs(file, convertedFiles) {
