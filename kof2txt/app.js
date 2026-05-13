@@ -26,6 +26,10 @@
     isEmbedded: false,
     lastResult: null,
     busy: false,
+    conversionInProgress: false,
+    cancelConversionRequested: false,
+    manualSelectionMode: false,
+    manualSelectedFileIds: new Set(),
     explorerApi: null,
     explorerVisible: false,
     lastDownloadName: null,
@@ -56,11 +60,20 @@
 
   function setBusy(busy) {
     state.busy = busy;
-    if (ui.refreshBtn) ui.refreshBtn.disabled = busy;
+    if (ui.refreshBtn) {
+      ui.refreshBtn.textContent = state.manualSelectionMode ? "Oppdater liste" : "Oppdater og konverter";
+      ui.refreshBtn.disabled = busy;
+    }
+    if (ui.stopBtn) {
+      ui.stopBtn.style.display = state.conversionInProgress ? "" : "none";
+      ui.stopBtn.disabled = !state.conversionInProgress || state.cancelConversionRequested;
+    }
+    if (ui.convertManualBtn) {
+      ui.convertManualBtn.style.display = state.manualSelectionMode ? "" : "none";
+      ui.convertManualBtn.disabled = busy || state.manualSelectedFileIds.size === 0;
+    }
     if (ui.localUploadBtn) ui.localUploadBtn.disabled = busy;
     if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = busy || !canOpenProjectUpload();
-    if (ui.convertSelectedBtn) ui.convertSelectedBtn.disabled = busy || !state.selectedFile;
-    if (ui.convertAllBtn) ui.convertAllBtn.disabled = busy || !state.fileList.length;
   }
 
   function shortText(text, len = 1500) {
@@ -187,21 +200,21 @@
     filesCard.appendChild(filesHeader);
 
     const btnRow = el("div", "btn-row");
-    const refreshBtn = el("button", null, "Oppdater liste");
-    const convertSelectedBtn = el("button", "primary", "Konverter valgt");
-    const convertAllBtn = el("button", null, "Konverter alle");
-    const localUploadBtn = el("button", null, "Last opp lokal fil");
-    const projectUploadBtn = el("button", null, "Last opp til prosjekt");
+    const refreshBtn = el("button", "primary", "Oppdater og konverter");
+    const stopBtn = el("button", "danger", "Stopp konvertering");
+    const convertManualBtn = el("button", "primary", "Konverter valgte");
+    const localUploadBtn = el("button", null, "Konverter lokal fil");
+    const projectUploadBtn = el("button", null, "Trimble Connect datautforsker");
     const localFileInput = document.createElement("input");
     localFileInput.type = "file";
     localFileInput.accept = ".kof,.sos,.sosi,.gml,.jxl,text/plain,application/gml+xml,application/xml";
     localFileInput.style.display = "none";
-    convertSelectedBtn.disabled = true;
-    convertAllBtn.disabled = true;
+    stopBtn.style.display = "none";
+    convertManualBtn.style.display = "none";
     projectUploadBtn.disabled = true;
     btnRow.appendChild(refreshBtn);
-    btnRow.appendChild(convertSelectedBtn);
-    btnRow.appendChild(convertAllBtn);
+    btnRow.appendChild(stopBtn);
+    btnRow.appendChild(convertManualBtn);
     btnRow.appendChild(localUploadBtn);
     btnRow.appendChild(projectUploadBtn);
     btnRow.appendChild(localFileInput);
@@ -215,7 +228,7 @@
     explorerCard.style.display = "none";
     const explorerHeader = el("div", "card-header", [
       el("div", null, [
-        el("div", "label", "Last opp til prosjekt"),
+        el("div", "label", "Trimble Connect datautforsker"),
         el("div", "subtitle", "Trimble Connects egen opplastingsvisning, åpnet i riktig prosjektmappe")
       ])
     ]);
@@ -257,8 +270,8 @@
       projectValue,
       fileCount,
       refreshBtn,
-      convertSelectedBtn,
-      convertAllBtn,
+      stopBtn,
+      convertManualBtn,
       localUploadBtn,
       projectUploadBtn,
       localFileInput,
@@ -301,15 +314,22 @@
 
     for (const file of state.fileList) {
       const isSelected = state.selectedFile?.id === file.id;
-      const row = el("label", `file-item${isSelected ? " selected" : ""}`);
+      const isManualSelected = state.manualSelectedFileIds.has(file.id);
+      const conversionState = getFileConversionState(file);
+      const row = el("label", `file-item ${conversionState.className}${isSelected || isManualSelected ? " selected" : ""}`);
 
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "kofFile";
-      radio.value = file.id;
-      radio.checked = isSelected;
-      radio.addEventListener("change", () => {
-        state.selectedFile = file;
+      const selector = document.createElement("input");
+      selector.type = state.manualSelectionMode ? "checkbox" : "radio";
+      selector.name = state.manualSelectionMode ? "manualKofFile" : "kofFile";
+      selector.value = file.id;
+      selector.checked = state.manualSelectionMode ? isManualSelected : isSelected;
+      selector.addEventListener("change", () => {
+        if (state.manualSelectionMode) {
+          if (selector.checked) state.manualSelectedFileIds.add(file.id);
+          else state.manualSelectedFileIds.delete(file.id);
+        } else {
+          state.selectedFile = file;
+        }
         renderFileList();
         setBusy(state.busy);
       });
@@ -318,8 +338,11 @@
       info.appendChild(el("div", "file-name", file.name || "(uten navn)"));
       if (file.path) info.appendChild(el("div", "file-meta", file.path));
 
-      row.appendChild(radio);
+      const statusBadge = el("span", `file-status ${conversionState.className}`, conversionState.label);
+
+      row.appendChild(selector);
       row.appendChild(info);
+      row.appendChild(statusBadge);
       ui.fileList.appendChild(row);
     }
   }
@@ -914,6 +937,10 @@
     "LETRA", "LETRE", "LETREMKAB", "VLU", "VLP", "VLSPR", "LEVAR"
   ]);
 
+  const IFC_ANNOTATION_LINE_TYPES = new Set([
+    "FET"
+  ]);
+
   const IFC_POINT_PRODUCT_TYPES = {
     ANB: "IFCPIPEFITTING",
     BFD: "IFCTANK",
@@ -1022,6 +1049,10 @@
         }
         stats.points += 1;
         stats.geom += 1;
+      } else if (object.geom === "curve" && isIfcAnnotationLineCandidate(object)) {
+        element = buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
+        stats.curves += 1;
+        stats.geom += 1;
       } else if (object.geom === "curve" && isIfcPipeCandidate(object)) {
         const dims = getIfcPipeDims(object.props || {}, { defaultShape: object.source === "jxl" ? "circle" : "rect" });
         if (dims) {
@@ -1105,12 +1136,12 @@
 
   function buildIfcReferenceGeometry(addEntity, context, placement, owner, guid, name, desc, geom, coords, zAxis, xAxis, extrusionDir) {
     if (geom === "point" && coords.length) {
-      return buildIfcReferencePointSolid(addEntity, context, placement, owner, guid, name, desc, coords[0], zAxis, xAxis, extrusionDir);
+      return buildIfcPointAnnotation(addEntity, context, owner, guid, name, desc, placement, coords[0]);
     }
     if ((geom === "curve" || geom === "polygon") && coords.length >= 2) {
-      return buildIfcCurveFallbackSolid(addEntity, context, placement, owner, guid, name, desc, coords, CONFIG.IFC_REFERENCE_LINE_RADIUS_M);
+      return buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
     }
-    return addEntity(`IFCBUILDINGELEMENTPROXY('${guid}',#${owner},'${name}','${desc}',$,#${placement},$,$,.ELEMENT.);`);
+    return addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','Original survey data',#${placement},$);`);
   }
 
   function buildIfcReferencePointSolid(addEntity, context, placement, owner, guid, name, desc, coord, zAxis, xAxis, extrusionDir) {
@@ -1338,8 +1369,14 @@
     return 0;
   }
 
+  function isIfcAnnotationLineCandidate(object) {
+    const code = normalizeIfcCode(object?.type || "");
+    return IFC_ANNOTATION_LINE_TYPES.has(code);
+  }
+
   function isIfcPipeCandidate(object) {
     const code = normalizeIfcCode(object?.type || "");
+    if (IFC_ANNOTATION_LINE_TYPES.has(code)) return false;
     if (IFC_PIPE_TYPES.has(code)) return true;
     const props = object?.props || {};
     return getIfcProp(props, ["Dimensjon"]) != null &&
@@ -2303,6 +2340,31 @@
     return [".txt", ".xml"];
   }
 
+  function getFileConversionState(file) {
+    if (isConvertedOutputCurrent(file)) {
+      return { className: "converted", label: "Konvertering OK" };
+    }
+
+    if (Array.isArray(file?.existingOutputs) && file.existingOutputs.length > 0) {
+      return { className: "outdated", label: "Ny versjon" };
+    }
+
+    return { className: "pending", label: "Venter" };
+  }
+
+  function markFileConverted(file, outName) {
+    if (!file || !outName) return;
+    const outputs = Array.isArray(file.existingOutputs) ? file.existingOutputs : [];
+    file.existingOutputs = [
+      ...outputs.filter((output) => output.name !== outName),
+      {
+        name: outName,
+        modifiedOn: new Date().toISOString(),
+        localConversionCurrent: true
+      }
+    ];
+  }
+
   function getPendingKofFiles(files = state.fileList) {
     return (Array.isArray(files) ? files : []).filter((file) => !isConvertedOutputCurrent(file));
   }
@@ -2401,7 +2463,7 @@
     await refreshKofList();
 
     const pendingFiles = getPendingKofFiles();
-    if (!CONFIG.AUTO_CONVERT_ON_OPEN || state.autoConvertInProgress || !pendingFiles.length) {
+    if (!CONFIG.AUTO_CONVERT_ON_OPEN || state.manualSelectionMode || state.autoConvertInProgress || !pendingFiles.length) {
       return;
     }
 
@@ -2456,6 +2518,8 @@
       state.lastUploadResult = uploadResult;
 
       if (uploadResult.ok) {
+        markFileConverted(file, converted.outName);
+        renderFileList();
         setStatus(`Ferdig: ${converted.outName} er lastet opp til prosjektet`, "success");
         showHint(buildConversionHint(converted, uploadResult));
       } else {
@@ -2478,6 +2542,26 @@
     } finally {
       setBusy(false);
     }
+  }
+
+  function requestStopConversion() {
+    if (!state.conversionInProgress) return;
+    state.cancelConversionRequested = true;
+    state.manualSelectionMode = true;
+    state.manualSelectedFileIds.clear();
+    setStatus("Stopper etter pågående fil...", "working");
+    showHint("Konverteringen stoppes når filen som behandles akkurat nå er ferdig. Deretter kan du velge filer manuelt og trykke <strong>Konverter valgte</strong>.");
+    renderFileList();
+    setBusy(state.busy);
+  }
+
+  async function processManualSelectedFiles() {
+    const selectedFiles = state.fileList.filter((file) => state.manualSelectedFileIds.has(file.id));
+    if (!selectedFiles.length) {
+      setStatus("Velg minst en KOF/SOSI/GML/JXL-fil først", "error");
+      return;
+    }
+    await processAllFiles({ source: "manual-selected", files: selectedFiles, skipExisting: false });
   }
 
   async function processAllFiles(options = {}) {
@@ -2520,10 +2604,20 @@
         return;
       }
 
+      state.conversionInProgress = true;
+      state.cancelConversionRequested = false;
+      setBusy(true);
+
       const summary = [];
       let count = 0;
+      let cancelled = false;
 
       for (const file of filesToProcess) {
+        if (state.cancelConversionRequested) {
+          cancelled = true;
+          break;
+        }
+
         count += 1;
         setStatus(`Konverterer ${count}/${filesToProcess.length}: ${file.name}...`, "working");
 
@@ -2537,6 +2631,8 @@
 
           if (!uploadResult.ok) {
             triggerDownload(converted.outName, converted.text);
+          } else {
+            markFileConverted(file, converted.outName);
           }
 
           summary.push({
@@ -2550,6 +2646,11 @@
         } catch (err) {
           summary.push({ ok: false, file: file.name, error: err?.message || String(err) });
         }
+
+        if (state.cancelConversionRequested) {
+          cancelled = true;
+          break;
+        }
       }
 
       const okCount = summary.filter((x) => x.ok).length;
@@ -2558,8 +2659,16 @@
       const localDownloadCount = summary.filter((x) => x.ok && !x.uploadOk).length;
       state.lastDownloadName = okCount === 1 ? summary.find((x) => x.ok)?.outName || null : null;
       state.lastUploadResult = okCount === 1 ? summary.find((x) => x.ok)?.uploadResult || null : null;
+      if (!cancelled && options.source === "manual-selected") {
+        state.manualSelectedFileIds.clear();
+      }
+      renderFileList();
 
-      if (failCount === 0) {
+      if (cancelled) {
+        state.manualSelectionMode = true;
+        setStatus(`Stoppet etter ${summary.length} av ${filesToProcess.length} fil${filesToProcess.length === 1 ? "" : "er"}`, "working");
+        showHint("Velg en eller flere filer i listen og trykk <strong>Konverter valgte</strong> for å fortsette kontrollert.");
+      } else if (failCount === 0) {
         if (uploadOkCount === okCount) {
           setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet opp${skippedCount ? ` (${skippedCount} hoppet over)` : ""}`, "success");
           showHint(
@@ -2580,8 +2689,9 @@
       }
 
       setDebug({
-        action: options.source === "auto-open" ? "autoConvertAllOnOpen" : "convertAll",
+        action: options.source === "auto-open" ? "autoConvertAllOnOpen" : options.source === "manual-selected" ? "convertSelectedManual" : "convertAll",
         total: summary.length,
+        cancelled,
         skippedCount,
         okCount,
         failCount,
@@ -2594,6 +2704,8 @@
       setStatus(`Feil: ${err?.message || String(err)}`, "error");
       setDebug({ error: err?.message || String(err), stack: err?.stack });
     } finally {
+      state.conversionInProgress = false;
+      state.cancelConversionRequested = false;
       setBusy(false);
     }
   }
@@ -2686,9 +2798,9 @@
   }
 
   function wireUi() {
-    ui.refreshBtn.addEventListener("click", refreshKofList);
-    ui.convertSelectedBtn.addEventListener("click", processSelectedFile);
-    ui.convertAllBtn.addEventListener("click", processAllFiles);
+    ui.refreshBtn.addEventListener("click", () => refreshKofListOnOpen("manual-refresh"));
+    ui.stopBtn.addEventListener("click", requestStopConversion);
+    ui.convertManualBtn.addEventListener("click", processManualSelectedFiles);
     ui.localUploadBtn.addEventListener("click", () => ui.localFileInput.click());
     ui.localFileInput.addEventListener("change", (event) => processLocalFile(event.target.files?.[0]));
     ui.projectUploadBtn.addEventListener("click", openProjectUploadExplorer);
@@ -2715,7 +2827,9 @@
         refreshKofList,
         refreshKofListOnOpen,
         processSelectedFile,
+        processManualSelectedFiles,
         processAllFiles,
+        requestStopConversion,
         processLocalFile,
         parseJxlForIfc,
         jxlToIfc,

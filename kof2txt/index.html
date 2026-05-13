@@ -126,6 +126,18 @@
       color: white;
     }
 
+    button.danger {
+      background: #8a2b2b;
+      border-color: #8a2b2b;
+      color: white;
+    }
+
+    button.danger:hover:not(:disabled) {
+      background: #6f2020;
+      border-color: #6f2020;
+      color: white;
+    }
+
     button:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -155,13 +167,33 @@
     }
 
     .file-item.selected {
-      border-color: var(--accent);
-      background: #fef3f4;
+      box-shadow: inset 3px 0 0 #5b8fb8;
     }
 
-    .file-item input[type="radio"] {
+    .file-item.converted {
+      border-color: #acd9bd;
+      background: #f3fbf6;
+    }
+
+    .file-item.converted:hover {
+      border-color: var(--success);
+      background: #eef9f2;
+    }
+
+    .file-item.pending {
+      border-color: #ead2a5;
+      background: #fffaf0;
+    }
+
+    .file-item.outdated {
+      border-color: #efb27b;
+      background: #fff5eb;
+    }
+
+    .file-item input[type="radio"],
+    .file-item input[type="checkbox"] {
       margin: 0;
-      accent-color: var(--accent);
+      accent-color: #5b8fb8;
     }
 
     .file-info {
@@ -180,6 +212,35 @@
       font-size: 11px;
       color: var(--muted);
       margin-top: 2px;
+    }
+
+    .file-status {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .file-status.converted {
+      background: #dff3e8;
+      color: #1e6b42;
+      border: 1px solid #a8d8bc;
+    }
+
+    .file-status.pending {
+      background: #fff1d6;
+      color: #7a520f;
+      border: 1px solid #e8c47c;
+    }
+
+    .file-status.outdated {
+      background: #ffe5cf;
+      color: #8a4d16;
+      border: 1px solid #edb37f;
     }
 
     .status {
@@ -308,7 +369,7 @@
 </head>
 <body>
   <div id="app"></div>
-  <script src="app.js?v=20260513-jxl-ifc"></script>
+  <script src="app.js?v=20260513-jxl-ifc-prod-ux-ref-annotation"></script>
 </body>
 </html>
 
