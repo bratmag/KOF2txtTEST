@@ -1140,35 +1140,47 @@
 
   function getIfcPointObjectDims(props) {
     const kumform = normalizeIfcToken(getIfcProp(props, ["Kumform"]));
-    const widthMm = firstNumber(getIfcProp(props, ["Bredde"]));
-    const lengthMm = firstNumber(getIfcProp(props, ["Lengde"]));
-    if (!kumform || (widthMm == null && lengthMm == null)) return null;
+    const widthM = pointDimensionToMeters(getIfcProp(props, ["Bredde"]));
+    const lengthM = pointDimensionToMeters(getIfcProp(props, ["Lengde"]));
+    if (!kumform || (widthM == null && lengthM == null)) return null;
 
-    const thkMm = Math.max(0, firstNumber(getIfcProp(props, ["Tykkelse"])) || 0);
+    const thkM = pointThicknessToMeters(getIfcProp(props, ["Tykkelse"]));
     const insideOutside = normalizeIfcToken(getIfcProp(props, ["InnvendigUtvendig"]));
     const usesInside = insideOutside.startsWith("ID") || insideOutside.includes("INNVENDIG");
     const shape = kumform.startsWith("R") ? "circle" : "rect";
-    const baseWidthMm = Math.max(0, widthMm ?? lengthMm ?? 0);
-    const baseLengthMm = Math.max(0, lengthMm ?? baseWidthMm);
-    if (baseWidthMm <= 0 || baseLengthMm <= 0) return null;
+    const baseWidthM = Math.max(0, widthM ?? lengthM ?? 0);
+    const baseLengthM = Math.max(0, lengthM ?? baseWidthM);
+    if (baseWidthM <= 0 || baseLengthM <= 0) return null;
 
-    const outerWidthMm = usesInside ? baseWidthMm + 2 * thkMm : baseWidthMm;
-    const outerLengthMm = usesInside ? baseLengthMm + 2 * thkMm : baseLengthMm;
+    const outerWidthM = usesInside ? baseWidthM + 2 * thkM : baseWidthM;
+    const outerLengthM = usesInside ? baseLengthM + 2 * thkM : baseLengthM;
     return {
       shape,
-      outerDiameterM: outerWidthMm / 1000,
-      outerWidthM: outerWidthMm / 1000,
-      outerLengthM: (kumform === "FK" || kumform === "F") ? outerWidthMm / 1000 : outerLengthMm / 1000,
-      thkM: thkMm / 1000,
+      outerDiameterM: outerWidthM,
+      outerWidthM,
+      outerLengthM: (kumform === "FK" || kumform === "F") ? outerWidthM : outerLengthM,
+      thkM,
       heightM: getIfcPointObjectHeight(props),
       props
     };
   }
 
   function getIfcPointObjectHeight(props) {
-    const heightMm = firstNumber(getIfcProp(props, ["Høyde", "Hoyde", "VertikalDimensjon", "Vertikal dimensjon"]));
-    if (heightMm != null && heightMm > 0) return heightMm / 1000;
+    const heightM = pointDimensionToMeters(getIfcProp(props, ["Høyde", "Hoyde", "VertikalDimensjon", "Vertikal dimensjon"]));
+    if (heightM != null && heightM > 0) return heightM;
     return CONFIG.IFC_POINT_OBJECT_HEIGHT_M;
+  }
+
+  function pointDimensionToMeters(value) {
+    const number = firstNumber(value);
+    if (number == null || number <= 0) return null;
+    return number > 50 ? number / 1000 : number;
+  }
+
+  function pointThicknessToMeters(value) {
+    const number = firstNumber(value);
+    if (number == null || number <= 0) return 0;
+    return number > 5 ? number / 1000 : number;
   }
 
   function getIfcPointObjectBaseZ(props, measuredZ, heightM) {
@@ -1190,11 +1202,17 @@
     const odMm = usesInsideDiameter ? dimMm + 2 * thkMm : dimMm;
     const pipeShape = String(getIfcProp(props, ["Rørform", "Rorform"]) || "").toUpperCase();
     const shapeToken = pipeShape.split(/\s+/)[0];
+    const shape = shapeToken === "F" || pipeShape.includes("FIRKANT")
+      ? "rect"
+      : shapeToken === "S" || pipeShape.includes("SIRK")
+        ? "circle"
+        : null;
+    if (!shape) return null;
     return {
       odM: odMm / 1000,
       idM: idMm / 1000,
       thkM: thkMm / 1000,
-      shape: shapeToken === "F" || pipeShape.includes("FIRKANT") ? "rect" : "circle"
+      shape
     };
   }
 
