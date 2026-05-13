@@ -77,7 +77,11 @@
   }
 
   function triggerDownload(filename, text) {
-    const mimeType = /\.xml$/i.test(String(filename || "")) ? "application/xml;charset=utf-8" : "text/plain;charset=utf-8";
+    const mimeType = /\.xml$/i.test(String(filename || ""))
+      ? "application/xml;charset=utf-8"
+      : /\.ifc$/i.test(String(filename || ""))
+        ? "application/x-step;charset=utf-8"
+        : "text/plain;charset=utf-8";
     const blob = new Blob([text], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -97,6 +101,11 @@
   function getXmlFilename(filename) {
     const name = String(filename || "output.kof").trim() || "output.kof";
     return /\.(kof|sos|sosi|gml)$/i.test(name) ? name.replace(/\.(kof|sos|sosi|gml)$/i, ".xml") : `${name}.xml`;
+  }
+
+  function getIfcFilename(filename) {
+    const name = String(filename || "output.gml").trim() || "output.gml";
+    return /\.gml$/i.test(name) ? name.replace(/\.gml$/i, ".ifc") : `${name}.ifc`;
   }
 
   function getUploadTargetFile() {
@@ -156,7 +165,7 @@
     titleCard.appendChild(el("div", "card-header", [
       el("h2", null, CONFIG.APP_TITLE)
     ]));
-    titleCard.appendChild(el("div", "subtitle", "Konverter .kof til TXT/XML og .sos/.sosi/.gml til LandXML"));
+    titleCard.appendChild(el("div", "subtitle", "Konverter .kof til TXT/XML, .sos/.sosi til LandXML og .gml til IFC"));
 
     const projectCard = el("div", "card");
     projectCard.appendChild(el("div", "label", "Prosjekt"));
@@ -703,7 +712,7 @@
     return "kof";
   }
 
-  function convertKofFile(kofText, fileName) {
+  function convertKofFile(kofText, fileName, options = {}) {
     const sourceText = String(kofText || "");
     const sourceType = detectSourceFileType(sourceText, fileName);
 
@@ -716,11 +725,28 @@
     }
 
     if (sourceType === "gml") {
-      return {
-        format: "xml",
-        outName: getXmlFilename(fileName),
-        text: gmlToLandXml(sourceText, { fileName })
-      };
+      try {
+        const ifc = gmlToIfc(sourceText, {
+          fileName,
+          projectName: state.project?.name || state.project?.id || "Prosjekt",
+          coordSys: "EPSG:5972"
+        });
+        return {
+          format: "ifc",
+          outName: getIfcFilename(fileName),
+          text: ifc.text,
+          stats: ifc.stats
+        };
+      } catch (err) {
+        console.warn("GML til IFC feilet, bruker LandXML fallback:", err);
+        return {
+          format: "xml",
+          outName: getXmlFilename(fileName),
+          text: gmlToLandXml(sourceText, { fileName }),
+          fallbackFrom: "ifc",
+          fallbackError: err?.message || String(err)
+        };
+      }
     }
 
     if (shouldConvertToLandXml(sourceText)) {
@@ -807,6 +833,288 @@
       planFeatureNamePrefix: "Plan feature",
       lineColor: "0,0,255"
     });
+  }
+
+  function gmlToIfc(gmlText, options = {}) {
+    const objects = parseGmlForIfc(gmlText);
+    const outName = getIfcFilename(options.fileName || "output.gml");
+    const result = buildIfc(objects, {
+      version: options.version || "IFC4",
+      projectName: options.projectName || "Prosjekt",
+      coordSys: options.coordSys || "EPSG:5972",
+      solidMode: options.solidMode !== false,
+      extrusionHeight: Number.isFinite(options.extrusionHeight) ? options.extrusionHeight : 3,
+      outputFile: outName
+    });
+    return result;
+  }
+
+  const IFC_PIPE_TYPES = new Set([
+    "DR", "SP", "OV", "AF", "VL", "TL", "LL",
+    "LETREUKAB", "LETREUVANN", "LETREUDREN",
+    "KAB", "EL", "TEL"
+  ]);
+
+  function buildIfc(objects, options = {}) {
+    const schema = options.version === "IFC2X3" || options.version === "IFC4X3" ? options.version : "IFC4";
+    const timestamp = new Date().toISOString().slice(0, 19);
+    const lines = [];
+    let counter = 1;
+    const elementRefs = [];
+
+    const addRaw = (line) => lines.push(line);
+    const addEntity = (body) => {
+      const id = counter;
+      counter += 1;
+      lines.push(`#${id}=${body}`);
+      return id;
+    };
+
+    addRaw("ISO-10303-21;");
+    addRaw("HEADER;");
+    addRaw("FILE_DESCRIPTION(('ViewDefinition [CoordinationView]'),'2;1');");
+    addRaw(`FILE_NAME('${ifcString(fileBaseName(options.outputFile || "output.ifc"))}','${timestamp}',('GML til IFC Konverter'),(''),'','','');`);
+    addRaw(`FILE_SCHEMA(('${schema}'));`);
+    addRaw("ENDSEC;");
+    addRaw("DATA;");
+
+    const org = addEntity("IFCORGANIZATION($,'GML-IFC Converter',$,$,$);");
+    const app = addEntity(`IFCAPPLICATION(#${org},'1.0','GML to IFC Converter','GML2IFC');`);
+    const person = addEntity("IFCPERSON($,'Bruker',$,$,$,$,$,$);");
+    const pao = addEntity(`IFCPERSONANDORGANIZATION(#${person},#${org},$);`);
+    const owner = addEntity(`IFCOWNERHISTORY(#${pao},#${app},$,.ADDED.,$,$,$,0);`);
+    const lengthUnit = addEntity("IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);");
+    const areaUnit = addEntity("IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.);");
+    const volumeUnit = addEntity("IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.);");
+    const angleUnit = addEntity("IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.);");
+    const units = addEntity(`IFCUNITASSIGNMENT((#${lengthUnit},#${areaUnit},#${volumeUnit},#${angleUnit}));`);
+    const origin = addEntity("IFCCARTESIANPOINT((0.,0.,0.));");
+    const zAxis = addEntity("IFCDIRECTION((0.,0.,1.));");
+    const xAxis = addEntity("IFCDIRECTION((1.,0.,0.));");
+    const axis3d = addEntity(`IFCAXIS2PLACEMENT3D(#${origin},#${zAxis},#${xAxis});`);
+    const extrusionDir = addEntity("IFCDIRECTION((0.,0.,1.));");
+    const context = addEntity(`IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.E-05,#${axis3d},$);`);
+    const project = addEntity(`IFCPROJECT('${ifcGuid()}',#${owner},'${ifcString(options.projectName || "Prosjekt")}',$,$,$,$,(#${context}),#${units});`);
+    const site = addEntity(`IFCSITE('${ifcGuid()}',#${owner},'GML Site','CRS: ${ifcString(options.coordSys || "EPSG:5972")}',$,#${axis3d},$,.ELEMENT.,$,$,$,$,$);`);
+    const building = addEntity(`IFCBUILDING('${ifcGuid()}',#${owner},'GML Building',$,$,#${axis3d},$,$,.ELEMENT.,$,$,$);`);
+    const storey = addEntity(`IFCBUILDINGSTOREY('${ifcGuid()}',#${owner},'Storey 0',$,$,#${axis3d},$,$,.ELEMENT.,0.);`);
+    addEntity(`IFCRELAGGREGATES('${ifcGuid()}',#${owner},$,$,#${project},(#${site}));`);
+    addEntity(`IFCRELAGGREGATES('${ifcGuid()}',#${owner},$,$,#${site},(#${building}));`);
+    addEntity(`IFCRELAGGREGATES('${ifcGuid()}',#${owner},$,$,#${building},(#${storey}));`);
+
+    const stats = { points: 0, curves: 0, solids: 0, pipes: 0, geom: 0, entities: 0 };
+
+    for (const [index, object] of (Array.isArray(objects) ? objects : []).entries()) {
+      const guid = ifcGuid();
+      const name = ifcString(object.props?.name || object.props?.Name || object.id || `Objekt_${index + 1}`).slice(0, 255);
+      const desc = ifcString(object.props?.description || object.props?.class || object.type || "").slice(0, 255);
+      const coords = (object.coords || []).slice(0, 200);
+      const placement = addEntity(`IFCLOCALPLACEMENT($,#${axis3d});`);
+      let shapeRef = "$";
+      let element;
+
+      if (object.geom === "point" && coords.length) {
+        const point = addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coords[0][0])},${formatIfcNumber(coords[0][1])},${formatIfcNumber(coords[0][2])}));`);
+        const gset = addEntity(`IFCGEOMETRICSET((#${point}));`);
+        const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Annotation','GeometricSet',(#${gset}));`);
+        const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+        shapeRef = `#${shape}`;
+        element = addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','SurveyPoint',#${placement},${shapeRef});`);
+        stats.points += 1;
+        stats.geom += 1;
+      } else if (object.geom === "curve" && IFC_PIPE_TYPES.has(String(object.type || "").toUpperCase())) {
+        const dims = getIfcPipeDims(object.props || {});
+        if (dims) {
+          const offset = getIfcZOffsetToCenter(object.props || {}, dims);
+          const adjusted = coords.map((coord) => [coord[0], coord[1], coord[2] + offset]);
+          if (dims.shape === "circle") {
+            const pointRefs = adjusted.map((coord) => `#${addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coord[0])},${formatIfcNumber(coord[1])},${formatIfcNumber(coord[2])}));`)}`);
+            const polyline = addEntity(`IFCPOLYLINE((${pointRefs.join(",")}));`);
+            const solid = addEntity(`IFCSWEPTDISKSOLID(#${polyline},${formatIfcNumber(dims.odM / 2)},${formatIfcNumber(dims.idM / 2)},$,$);`);
+            const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Body','SweptSolid',(#${solid}));`);
+            const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+            shapeRef = `#${shape}`;
+            element = addEntity(`IFCPIPESEGMENT('${guid}',#${owner},'${name}','${desc}',$,#${placement},${shapeRef},$,.NOTDEFINED.);`);
+          } else {
+            const solidRefs = buildIfcRectangularPipeSolids(addEntity, adjusted, dims);
+            if (solidRefs.length) {
+              const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Body','SweptSolid',(${solidRefs.join(",")}));`);
+              const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+              shapeRef = `#${shape}`;
+            }
+            element = addEntity(`IFCCABLESEGMENT('${guid}',#${owner},'${name}','${desc}',$,#${placement},${shapeRef},$,.NOTDEFINED.);`);
+          }
+          stats.pipes += 1;
+          stats.solids += 1;
+          stats.geom += 1;
+        } else {
+          element = buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
+          stats.curves += 1;
+          stats.geom += 1;
+        }
+      } else if (object.geom === "curve" && coords.length >= 2) {
+        element = buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
+        stats.curves += 1;
+        stats.geom += 1;
+      } else if (object.geom === "polygon" && coords.length >= 4) {
+        if (options.solidMode !== false) {
+          element = buildIfcPolygonSolid(addEntity, context, placement, owner, guid, name, desc, coords, options.extrusionHeight || 3, zAxis, xAxis, extrusionDir);
+          stats.solids += 1;
+          stats.geom += 1;
+        } else {
+          element = buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords);
+          stats.curves += 1;
+          stats.geom += 1;
+        }
+      } else {
+        element = addEntity(`IFCBUILDINGELEMENTPROXY('${guid}',#${owner},'${name}','${desc}',$,#${placement},$,$,.ELEMENT.);`);
+      }
+
+      elementRefs.push(`#${element}`);
+      addIfcProperties(addEntity, owner, element, object.props || {});
+    }
+
+    if (elementRefs.length) {
+      addEntity(`IFCRELCONTAINEDINSPATIALSTRUCTURE('${ifcGuid()}',#${owner},'Innhold',$,(${elementRefs.join(",")}),#${storey});`);
+    }
+
+    addRaw("ENDSEC;");
+    addRaw("END-ISO-10303-21;");
+    stats.entities = counter - 1;
+    return { text: lines.join("\n"), stats };
+  }
+
+  function buildIfcCurveAnnotation(addEntity, context, owner, guid, name, desc, placement, coords) {
+    const pointRefs = coords.map((coord) => `#${addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coord[0])},${formatIfcNumber(coord[1])},${formatIfcNumber(coord[2])}));`)}`);
+    const polyline = addEntity(`IFCPOLYLINE((${pointRefs.join(",")}));`);
+    const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Annotation','Curve3D',(#${polyline}));`);
+    const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+    return addEntity(`IFCANNOTATION('${guid}',#${owner},'${name}','${desc}','Annotation curve',#${placement},#${shape});`);
+  }
+
+  function buildIfcPolygonSolid(addEntity, context, placement, owner, guid, name, desc, coords, extrusionHeight, zAxis, xAxis, extrusionDir) {
+    const ring = coords.slice(0, -1);
+    const pointRefs = ring.map((coord) => `#${addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(coord[0])},${formatIfcNumber(coord[1])}));`)}`);
+    pointRefs.push(pointRefs[0]);
+    const polyline = addEntity(`IFCPOLYLINE((${pointRefs.join(",")}));`);
+    const profile = addEntity(`IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,#${polyline});`);
+    const baseZ = Math.min(...ring.map((coord) => Number(coord[2]) || 0));
+    const basePoint = addEntity(`IFCCARTESIANPOINT((0.,0.,${formatIfcNumber(baseZ)}));`);
+    const solidAxis = addEntity(`IFCAXIS2PLACEMENT3D(#${basePoint},#${zAxis},#${xAxis});`);
+    const solid = addEntity(`IFCEXTRUDEDAREASOLID(#${profile},#${solidAxis},#${extrusionDir},${formatIfcNumber(extrusionHeight)});`);
+    const rep = addEntity(`IFCSHAPEREPRESENTATION(#${context},'Body','SweptSolid',(#${solid}));`);
+    const shape = addEntity(`IFCPRODUCTDEFINITIONSHAPE($,$,(#${rep}));`);
+    return addEntity(`IFCBUILDINGELEMENTPROXY('${guid}',#${owner},'${name}','${desc}',$,#${placement},#${shape},$,.ELEMENT.);`);
+  }
+
+  function buildIfcRectangularPipeSolids(addEntity, coords, dims) {
+    const profile = addEntity(`IFCRECTANGLEHOLLOWPROFILEDEF(.AREA.,$,$,${formatIfcNumber(dims.odM / 2)},${formatIfcNumber(dims.odM / 2)},${formatIfcNumber(dims.thkM)},$,$);`);
+    const solidRefs = [];
+    for (let index = 0; index < coords.length - 1; index += 1) {
+      const p0 = coords[index];
+      const p1 = coords[index + 1];
+      const dx = p1[0] - p0[0];
+      const dy = p1[1] - p0[1];
+      const dz = p1[2] - p0[2];
+      const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (length < 1e-9) continue;
+      const zx = dx / length;
+      const zy = dy / length;
+      const zz = dz / length;
+      const baseAxis = Math.abs(zz) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      const dot = baseAxis[0] * zx + baseAxis[1] * zy + baseAxis[2] * zz;
+      let ex = baseAxis[0] - dot * zx;
+      let ey = baseAxis[1] - dot * zy;
+      let ez = baseAxis[2] - dot * zz;
+      const en = Math.sqrt(ex * ex + ey * ey + ez * ez) || 1;
+      ex /= en; ey /= en; ez /= en;
+      const segOrigin = addEntity(`IFCCARTESIANPOINT((${formatIfcNumber(p0[0])},${formatIfcNumber(p0[1])},${formatIfcNumber(p0[2])}));`);
+      const segZ = addEntity(`IFCDIRECTION((${formatIfcNumber(zx, 8)},${formatIfcNumber(zy, 8)},${formatIfcNumber(zz, 8)}));`);
+      const segX = addEntity(`IFCDIRECTION((${formatIfcNumber(ex, 8)},${formatIfcNumber(ey, 8)},${formatIfcNumber(ez, 8)}));`);
+      const segAxis = addEntity(`IFCAXIS2PLACEMENT3D(#${segOrigin},#${segZ},#${segX});`);
+      const extDir = addEntity("IFCDIRECTION((0.,0.,1.));");
+      const solid = addEntity(`IFCEXTRUDEDAREASOLID(#${profile},#${segAxis},#${extDir},${formatIfcNumber(length)});`);
+      solidRefs.push(`#${solid}`);
+    }
+    return solidRefs;
+  }
+
+  function addIfcProperties(addEntity, owner, element, props) {
+    const entries = Object.entries(props || {}).filter(([key]) => key !== "gml:id").slice(0, 30);
+    if (!entries.length) return;
+    const propertyRefs = [];
+    for (const [key, value] of entries) {
+      const property = addEntity(`IFCPROPERTYSINGLEVALUE('${ifcString(key).slice(0, 255)}',$,IFCLABEL('${ifcString(value).slice(0, 255)}'),$);`);
+      propertyRefs.push(`#${property}`);
+    }
+    const pset = addEntity(`IFCPROPERTYSET('${ifcGuid()}',#${owner},'GML_Properties',$,(${propertyRefs.join(",")}));`);
+    addEntity(`IFCRELDEFINESBYPROPERTIES('${ifcGuid()}',#${owner},$,$,(#${element}),#${pset});`);
+  }
+
+  function getIfcPipeDims(props) {
+    const dimMm = firstNumber(props.Dimensjon);
+    if (dimMm == null || dimMm <= 0) return null;
+    const thkMm = firstNumber(props.Tykkelse) || 0;
+    const insideOutside = String(props.InnvendigUtvendig || "").toUpperCase();
+    const usesInsideDiameter = insideOutside.startsWith("ID") || insideOutside.includes("INNVENDIG");
+    const idMm = usesInsideDiameter ? dimMm : Math.max(0, dimMm - 2 * thkMm);
+    const odMm = usesInsideDiameter ? dimMm + 2 * thkMm : dimMm;
+    const pipeShape = String(props.Rørform || props.Rorform || "").toUpperCase();
+    const shapeToken = pipeShape.split(/\s+/)[0];
+    return {
+      odM: odMm / 1000,
+      idM: idMm / 1000,
+      thkM: thkMm / 1000,
+      shape: shapeToken === "F" || pipeShape.includes("FIRKANT") ? "rect" : "circle"
+    };
+  }
+
+  function getIfcZOffsetToCenter(props, dims) {
+    const reference = String(props.Høydereferanse || props.Hoydereferanse || "").toUpperCase();
+    if (reference.includes("BUNN_INNVENDIG")) return dims.idM / 2;
+    if (reference.includes("BUNN_UTVENDIG")) return dims.odM / 2;
+    if (reference.includes("TOPP_INNVENDIG")) return -dims.idM / 2;
+    if (reference.includes("TOPP_UTVENDIG")) return -dims.odM / 2;
+    return 0;
+  }
+
+  function firstNumber(value) {
+    const match = String(value || "").match(/-?\d+(?:[.,]\d+)?/);
+    return match ? Number(match[0].replace(",", ".")) : null;
+  }
+
+  function ifcGuid() {
+    const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$";
+    let hex = "";
+    if (globalThis.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      globalThis.crypto.getRandomValues(bytes);
+      hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    } else {
+      hex = `${Date.now().toString(16)}${Math.random().toString(16).slice(2).padEnd(20, "0")}`.slice(0, 32);
+    }
+    let value = BigInt(`0x${hex}`);
+    let result = "";
+    for (let index = 0; index < 22; index += 1) {
+      result += chars[Number(value % 64n)];
+      value /= 64n;
+    }
+    return result;
+  }
+
+  function formatIfcNumber(value, decimals = 6) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "0.";
+    const fixed = number.toFixed(decimals).replace(/0+$/g, "").replace(/\.$/, ".");
+    return fixed === "-0." ? "0." : fixed;
+  }
+
+  function ifcString(value) {
+    return String(value ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  }
+
+  function fileBaseName(path) {
+    return String(path || "output.ifc").split(/[\\/]/).pop() || "output.ifc";
   }
 
   function buildLandXmlDocument(parsed, options = {}) {
@@ -1085,6 +1393,90 @@
       points: dedupeLandXmlPointNames(points),
       lines: lineFeatures
     };
+  }
+
+  function parseGmlForIfc(gmlText) {
+    const xml = repairUtf8Mojibake(String(gmlText || ""));
+    const members = extractGmlFeatureMembers(xml);
+    const featureBlocks = members.length ? members : [{ type: "GML", attrsText: "", body: xml }];
+    const objects = [];
+
+    for (const feature of featureBlocks) {
+      const props = gmlAttributesToProps(getGmlFeatureAttributes(feature));
+      const featureType = feature.type || "GML";
+      const featureId = props["gml:id"] || props.id || props.S_OBJID || `obj_${objects.length + 1}`;
+      let produced = false;
+
+      const lineBlocks = [
+        ...extractXmlBlocks(feature.body, "LineString"),
+        ...extractXmlBlocks(feature.body, "LinearRing")
+      ];
+      for (const block of lineBlocks) {
+        const coordinateSets = extractGmlCoordinateSets(block);
+        for (const coords of coordinateSets) {
+          if (coords.length < 2) continue;
+          const ifcCoords = coords.map((coord) => [coord.e, coord.n, coord.h]);
+          objects.push({
+            id: featureId,
+            type: featureType,
+            coords: ifcCoords,
+            props,
+            geom: detectIfcGeometryType(ifcCoords)
+          });
+          produced = true;
+        }
+      }
+
+      const pointBlocks = extractXmlBlocks(feature.body, "Point");
+      for (const block of pointBlocks) {
+        const coordinateSets = extractGmlCoordinateSets(block);
+        for (const coords of coordinateSets) {
+          if (!coords.length) continue;
+          const coord = coords[0];
+          objects.push({
+            id: featureId,
+            type: featureType,
+            coords: [[coord.e, coord.n, coord.h]],
+            props,
+            geom: "point"
+          });
+          produced = true;
+        }
+      }
+
+      if (!produced && Object.keys(props).length) {
+        objects.push({
+          id: featureId,
+          type: featureType,
+          coords: [],
+          props,
+          geom: "none"
+        });
+      }
+    }
+
+    return objects;
+  }
+
+  function gmlAttributesToProps(attributes) {
+    const props = {};
+    for (const attribute of Array.isArray(attributes) ? attributes : []) {
+      const label = String(attribute?.label || "").trim();
+      if (!label) continue;
+      props[label] = String(attribute?.value ?? "").trim();
+    }
+    return props;
+  }
+
+  function detectIfcGeometryType(coords) {
+    if (!Array.isArray(coords) || !coords.length) return "none";
+    if (coords.length === 1) return "point";
+    const first = coords[0];
+    const last = coords[coords.length - 1];
+    const closed = Math.abs(first[0] - last[0]) < 1e-4 &&
+      Math.abs(first[1] - last[1]) < 1e-4 &&
+      Math.abs(first[2] - last[2]) < 1e-4;
+    return closed && coords.length >= 4 ? "polygon" : "curve";
   }
 
   function extractGmlFeatureMembers(xml) {
@@ -1474,14 +1866,28 @@
   function isConvertedOutputCurrent(file) {
     const outputs = Array.isArray(file?.existingOutputs) ? file.existingOutputs : [];
     if (!outputs.length) return false;
+    const expectedExtensions = getExpectedOutputExtensions(file);
+    const matchingOutputs = outputs.filter((output) =>
+      expectedExtensions.some((extension) => String(output?.name || "").toLowerCase().endsWith(extension))
+    );
+    if (!matchingOutputs.length) return false;
 
     const sourceTime = parseFileTimestamp(file.modifiedOn);
     if (!sourceTime) return true;
 
-    return outputs.some((output) => {
+    return matchingOutputs.some((output) => {
       const outputTime = parseFileTimestamp(output.modifiedOn);
       return outputTime != null && outputTime + 1000 >= sourceTime;
     });
+  }
+
+  function getExpectedOutputExtensions(file) {
+    const name = String(file?.name || "").toLowerCase();
+    if (name.endsWith(".gml")) {
+      return [".ifc"];
+    }
+    if (name.endsWith(".sos") || name.endsWith(".sosi")) return [".xml"];
+    return [".txt", ".xml"];
   }
 
   function getPendingKofFiles(files = state.fileList) {

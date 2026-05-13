@@ -540,7 +540,9 @@ async function uploadToSignedUrl(uploadUrl, fileBuffer, diagnostics, fileName) {
   const body = new Uint8Array(fileBuffer);
   const preferredContentType = /\.xml$/i.test(String(fileName || ""))
     ? "application/xml; charset=utf-8"
-    : "text/plain; charset=utf-8";
+    : /\.ifc$/i.test(String(fileName || ""))
+      ? "application/x-step; charset=utf-8"
+      : "text/plain; charset=utf-8";
   const methods = [
     { method: "PUT", headers: { "Content-Type": preferredContentType } },
     { method: "PUT", headers: { "Content-Type": "application/octet-stream" } },
@@ -1323,11 +1325,11 @@ function isSourceFileName(name) {
 }
 
 function isConvertedOutputName(name) {
-  return /\.(txt|xml)$/i.test(String(name || ""));
+  return /\.(txt|xml|ifc)$/i.test(String(name || ""));
 }
 
 function outputBaseName(name) {
-  return String(name || "").replace(/\.(kof|sos|sosi|gml|txt|xml)$/i, "").toLowerCase();
+  return String(name || "").replace(/\.(kof|sos|sosi|gml|txt|xml|ifc)$/i, "").toLowerCase();
 }
 
 function findExistingConvertedOutputs(file, convertedFiles) {
