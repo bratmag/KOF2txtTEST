@@ -15,6 +15,8 @@ exports.handler = async function handler(event) {
     if (action === "downloadKofFile") return await handleDownloadKofFile(body);
     if (action === "probeCore") return await handleProbeCore(body);
     if (action === "uploadConvertedTxt") return await handleUploadConvertedTxt(body);
+    if (action === "getFieldDataJxl") return await handleGetFieldDataJxl(body);
+    if (action === "listJxlSources") return await handleListJxlSources(body);
 
     return jsonResponse(400, { ok: false, error: `Unknown action: ${String(action)}` });
   } catch (err) {
@@ -169,6 +171,17 @@ async function fetchWithBearer(url, token, options = {}, timeoutMs = 30000) {
       ...(options.headers || {})
     }
   }, timeoutMs);
+}
+
+async function fetchFieldDataJson(url, token) {
+  return fetchRaw(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json, text/plain, */*",
+      "x-field-data-viewer-workspace-type": "Survey"
+    }
+  }, 60000);
 }
 
 async function fetchTextNoAuth(url) {
@@ -1036,13 +1049,239 @@ async function handleListProjectKofFiles(body) {
   return jsonResponse(200, listResult);
 }
 
+async function listProjectJxlFiles({ token, projectId, projectLocation }) {
+  const base = await getCoreBaseUrlAsync(projectLocation);
+  const diagnostics = [];
+  const url = `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.jxl&type=file`;
+  const res = await fetchJsonWithBearer(url, token);
+  diagnostics.push({
+    name: "search-jxl-sources",
+    url,
+    ok: res.ok,
+    status: res.status,
+    preview: shortText(res.text, 500)
+  });
+
+  const files = res.ok && res.json
+    ? normalizeFilesFromAnyResponse(res.json)
+        .filter((file) => file?.id && /\.jxl$/i.test(file.name || ""))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" }))
+    : [];
+
+  return { ok: files.length > 0, files, diagnostics };
+}
+
+async function listFieldDataJxlJobs({ token, projectId }) {
+  const diagnostics = [];
+  const encodedProjectId = encodeURIComponent(projectId);
+  const url = `https://eu.api.maps.trimblegeospatial.com/projects/${encodedProjectId}/surveyjobs/_query?sortBy=UpdatedUtc+DESC&pageIndex=0&pageSize=1500`;
+  const res = await fetchFieldDataJson(url, token);
+  diagnostics.push({
+    name: "field-data-jxl-sources",
+    url,
+    ok: res.ok,
+    status: res.status,
+    preview: shortText(res.text, 700)
+  });
+
+  if (!res.ok || !res.json) return { ok: false, jobs: [], diagnostics };
+
+  const jobs = (Array.isArray(res.json.items) ? res.json.items : [])
+    .filter((job) => {
+      const name = `${job?.name || ""} ${job?.rootDataFileJxl?.fileName || ""} ${job?.rootDataFile?.fileName || ""}`;
+      return /\.jxl\b/i.test(name) || job?.rootDataFileJxl || /jxl/i.test(name);
+    })
+    .map((job) => ({
+      id: job.id || null,
+      name: job.name || null,
+      updatedUtc: job.updatedUtc || job.UpdatedUtc || job.updatedOn || job.modifiedOn || null,
+      jxlFileName: job.rootDataFileJxl?.fileName || (job.name ? `${job.name}.jxl` : null),
+      jxlFileId: job.rootDataFileJxl?.id || null,
+      size: job.rootDataFileJxl?.size || null
+    }))
+    .filter((job) => job.id);
+
+  return { ok: jobs.length > 0, jobs, diagnostics };
+}
+
+async function handleGetFieldDataJxl(body) {
+  const { token, projectId, projectLocation, jobName, jobTrn } = body;
+  const wantedName = String(jobName || "JXL to IFC").trim() || "JXL to IFC";
+
+  if (!token || !projectId) {
+    return jsonResponse(400, { ok: false, error: "Mangler token eller projectId" });
+  }
+
+  const diagnostics = [];
+  const encodedProjectId = encodeURIComponent(projectId);
+  const listUrl = `https://eu.api.maps.trimblegeospatial.com/projects/${encodedProjectId}/surveyjobs/_query?sortBy=UpdatedUtc+DESC&pageIndex=0&pageSize=1500`;
+  const listRes = await fetchFieldDataJson(listUrl, token);
+  diagnostics.push({
+    name: "surveyjobs-query",
+    url: listUrl,
+    ok: listRes.ok,
+    status: listRes.status,
+    preview: shortText(listRes.text, 700)
+  });
+
+  if (!listRes.ok || !listRes.json) {
+    return jsonResponse(200, {
+      ok: false,
+      action: "getFieldDataJxl",
+      error: "Kunne ikke liste Survey Jobs fra Field Data.",
+      diagnostics
+    });
+  }
+
+  const jobs = Array.isArray(listRes.json.items) ? listRes.json.items : [];
+  const normalizedWanted = normalizeFieldDataName(wantedName);
+  const job = jobTrn
+    ? jobs.find((item) => String(item?.id || "") === String(jobTrn))
+    : jobs.find((item) => {
+    const candidates = [
+      item?.name,
+      item?.rootDataFile?.fileName,
+      item?.rootDataFileJxl?.fileName
+    ].filter(Boolean);
+    return candidates.some((value) => normalizeFieldDataName(value).includes(normalizedWanted));
+  }) || jobs.find((item) => normalizeFieldDataName(item?.name || "") === normalizedWanted);
+
+  if (!job?.id) {
+    return jsonResponse(200, {
+      ok: false,
+      action: "getFieldDataJxl",
+      error: `Fant ingen Field Data-jobb som matcher "${wantedName}".`,
+      jobs: jobs.slice(0, 25).map((item) => ({
+        id: item?.id || null,
+        name: item?.name || null,
+        updatedUtc: item?.updatedUtc || item?.UpdatedUtc || null
+      })),
+      diagnostics
+    });
+  }
+
+  const detailUrl = `https://eu.api.maps.trimblegeospatial.com/projects/${encodedProjectId}/surveyjobs/${job.id}?includeAttachments=false`;
+  const detailRes = await fetchFieldDataJson(detailUrl, token);
+  diagnostics.push({
+    name: "surveyjob-detail",
+    url: detailUrl,
+    ok: detailRes.ok,
+    status: detailRes.status,
+    preview: shortText(detailRes.text, 700)
+  });
+
+  if (!detailRes.ok || !detailRes.json) {
+    return jsonResponse(200, {
+      ok: false,
+      action: "getFieldDataJxl",
+      error: "Fant jobben, men kunne ikke hente Field Data job details.",
+      job: { id: job.id, name: job.name || null },
+      diagnostics
+    });
+  }
+
+  const detail = detailRes.json;
+  const jxlFile = detail.rootDataFileJxl || null;
+  const downloadUrl = jxlFile?.downloadUrl || null;
+  if (!downloadUrl) {
+    return jsonResponse(200, {
+      ok: false,
+      action: "getFieldDataJxl",
+      error: "Jobben mangler rootDataFileJxl.downloadUrl.",
+      job: summarizeFieldDataJob(detail),
+      diagnostics
+    });
+  }
+
+  const jxlRes = await fetchTextNoAuth(downloadUrl);
+  diagnostics.push({
+    name: "rootDataFileJxl-download",
+    ok: jxlRes.ok,
+    status: jxlRes.status,
+    contentType: jxlRes.contentType,
+    signedUrlHost: safeHost(downloadUrl),
+    preview: shortText(jxlRes.text, 400)
+  });
+
+  if (!jxlRes.ok) {
+    return jsonResponse(200, {
+      ok: false,
+      action: "getFieldDataJxl",
+      error: "Fant JXL downloadUrl, men nedlasting feilet.",
+      job: summarizeFieldDataJob(detail),
+      diagnostics
+    });
+  }
+
+  const uploadParent = await resolveProjectUploadParent({ token, projectId, projectLocation });
+  diagnostics.push(...uploadParent.diagnostics);
+
+  return jsonResponse(200, {
+    ok: true,
+    action: "getFieldDataJxl",
+    project: { id: projectId, location: projectLocation },
+    job: summarizeFieldDataJob(detail),
+    jxlFile: {
+      id: jxlFile.id || null,
+      fileName: jxlFile.fileName || `${wantedName}.jxl`,
+      size: jxlFile.size || jxlRes.text.length,
+      contentType: jxlRes.contentType
+    },
+    uploadParentId: uploadParent.parentId,
+    uploadParentSource: uploadParent.source,
+    text: jxlRes.text,
+    diagnostics
+  });
+}
+
+async function handleListJxlSources(body) {
+  const { token, projectId, projectLocation } = body;
+  if (!token || !projectId) {
+    return jsonResponse(400, { ok: false, error: "Mangler token eller projectId" });
+  }
+
+  const diagnostics = [];
+  const connect = await listProjectJxlFiles({ token, projectId, projectLocation });
+  diagnostics.push(...connect.diagnostics);
+
+  const fieldData = await listFieldDataJxlJobs({ token, projectId });
+  diagnostics.push(...fieldData.diagnostics);
+
+  const sources = [
+    ...connect.files.map((file) => ({
+      sourceType: "connect-file",
+      id: file.id,
+      name: file.name,
+      path: file.path || "Connect Explorer",
+      modifiedOn: file.modifiedOn || null,
+      file
+    })),
+    ...fieldData.jobs.map((job) => ({
+      sourceType: "field-data",
+      id: job.id,
+      name: job.jxlFileName || job.name || job.id,
+      path: `Field Data${job.name ? ` / ${job.name}` : ""}`,
+      modifiedOn: job.updatedUtc || null,
+      job
+    }))
+  ].sort((a, b) => String(b.modifiedOn || "").localeCompare(String(a.modifiedOn || "")));
+
+  return jsonResponse(200, {
+    ok: connect.ok || fieldData.ok,
+    action: "listJxlSources",
+    project: { id: projectId, location: projectLocation },
+    sources,
+    diagnostics
+  });
+}
+
 async function tryListProjectFilesCandidates({ token, projectId, projectLocation }) {
   const base = await getCoreBaseUrlAsync(projectLocation);
   const regions = await discoverRegions();
   const seedDiagnostics = [];
   const searchFilesByKey = new Map();
 
-  for (const query of [".kof", ".sos", ".sosi", ".gml", ".jxl"]) {
+  for (const query of [".kof", ".sos", ".sosi", ".gml"]) {
     const url = `${base}/search?projectId=${encodeURIComponent(projectId)}&query=${encodeURIComponent(query)}&type=file`;
     const searchProbe = await fetchJsonWithBearer(url, token);
     const searchFiles = searchProbe.ok && searchProbe.json
@@ -1117,10 +1356,6 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
     {
       name: "search-gml",
       url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.gml&type=file`
-    },
-    {
-      name: "search-jxl",
-      url: `${base}/search?projectId=${encodeURIComponent(projectId)}&query=.jxl&type=file`
     }
   ];
 
@@ -1196,7 +1431,7 @@ async function tryListProjectFilesCandidates({ token, projectId, projectLocation
   return {
     ok: false,
     action: "listProjectKofFiles",
-    error: "Fant ingen fungerende kandidat for fillisting, eller ingen .kof/.sos/.gml/.jxl-filer i prosjektet.",
+    error: "Fant ingen fungerende kandidat for fillisting, eller ingen .kof/.sos/.gml-filer i prosjektet.",
     project: { id: projectId, location: projectLocation },
     resolvedBaseUrl: base,
     regionsDiscovered: regions,
@@ -1325,7 +1560,7 @@ async function tryFolderTreeListing({ token, projectId, projectLocation, seedFol
 }
 
 function isSourceFileName(name) {
-  return /\.(kof|sos|sosi|gml|jxl)$/i.test(String(name || ""));
+  return /\.(kof|sos|sosi|gml)$/i.test(String(name || ""));
 }
 
 function isConvertedOutputName(name) {
@@ -1344,6 +1579,131 @@ function findExistingConvertedOutputs(file, convertedFiles) {
     (candidate.parentId || null) === parentId &&
     outputBaseName(candidate.name) === fileBase
   );
+}
+
+function normalizeFieldDataName(value) {
+  return String(value || "")
+    .replace(/\.[a-z0-9]+$/i, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function summarizeFieldDataJob(job) {
+  return {
+    id: job?.id || null,
+    name: job?.name || null,
+    rootDataFile: job?.rootDataFile ? {
+      id: job.rootDataFile.id || null,
+      fileName: job.rootDataFile.fileName || null,
+      size: job.rootDataFile.size || null
+    } : null,
+    rootDataFileJxl: job?.rootDataFileJxl ? {
+      id: job.rootDataFileJxl.id || null,
+      fileName: job.rootDataFileJxl.fileName || null,
+      size: job.rootDataFileJxl.size || null
+    } : null
+  };
+}
+
+async function resolveProjectUploadParent({ token, projectId, projectLocation }) {
+  const base = await getCoreBaseUrlAsync(projectLocation);
+  const diagnostics = [];
+  const candidates = [
+    {
+      name: "project-metadata",
+      url: `${base}/projects/${encodeURIComponent(projectId)}`
+    },
+    {
+      name: "project-folders",
+      url: `${base}/projects/${encodeURIComponent(projectId)}/folders`
+    },
+    {
+      name: "folders-project-query",
+      url: `${base}/folders?projectId=${encodeURIComponent(projectId)}`
+    },
+    {
+      name: "project-root-folder",
+      url: `${base}/projects/${encodeURIComponent(projectId)}/rootfolder`
+    }
+  ];
+
+  for (const candidate of candidates) {
+    const res = await fetchJsonWithBearer(candidate.url, token);
+    diagnostics.push({
+      name: `resolve-upload-parent:${candidate.name}`,
+      url: candidate.url,
+      ok: res.ok,
+      status: res.status,
+      preview: shortText(res.text, 500)
+    });
+    if (!res.ok || !res.json) continue;
+
+    const directId = extractProjectFolderId(res.json);
+    if (directId) {
+      return { parentId: directId, source: candidate.name, diagnostics };
+    }
+
+    const folders = normalizeFoldersFromAnyResponse(res.json);
+    const rootFolder = folders.find((folder) => !folder.parentId) || folders[0];
+    if (rootFolder?.id) {
+      return { parentId: rootFolder.id, source: candidate.name, diagnostics };
+    }
+  }
+
+  return { parentId: null, source: null, diagnostics };
+}
+
+function extractProjectFolderId(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const candidates = [
+    payload.rootFolderId,
+    payload.rootFolder?.id,
+    payload.root?.id,
+    payload.folderId,
+    payload.folder?.id,
+    payload.data?.rootFolderId,
+    payload.data?.rootFolder?.id,
+    payload.data?.folderId
+  ].filter(Boolean);
+  return candidates.length ? String(candidates[0]) : null;
+}
+
+function normalizeFoldersFromAnyResponse(payload) {
+  const out = [];
+  const seen = new Set();
+  walkFolders(payload, out, seen);
+  return out;
+}
+
+function walkFolders(node, out, seen) {
+  if (node == null) return;
+  if (Array.isArray(node)) {
+    for (const item of node) walkFolders(item, out, seen);
+    return;
+  }
+  if (typeof node !== "object") return;
+
+  const type = String(node.type || node.itemType || node.kind || node.objectType || "").toLowerCase();
+  const hasFolderSignal = type.includes("folder") || node.folderId || node.rootFolderId || node.parentFolderId;
+  const id = node.id || node.folderId || node.rootFolderId || null;
+  const name = node.name || node.title || node.folderName || null;
+  if (id && (hasFolderSignal || name)) {
+    const normalized = {
+      id: String(id),
+      name: name ? String(name) : "",
+      parentId: node.parentId || node.parentFolderId || node.parent?.id || null
+    };
+    const key = `${normalized.id}|${normalized.parentId || ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(normalized);
+    }
+  }
+
+  for (const value of Object.values(node)) {
+    if (value && typeof value === "object") walkFolders(value, out, seen);
+  }
 }
 
 function normalizePathValue(pathValue) {

@@ -22,6 +22,9 @@
     project: null,
     selectedFile: null,
     fileList: [],
+    activeView: "converter",
+    jxlSources: [],
+    selectedJxlSource: null,
     tokenWaiters: [],
     isEmbedded: false,
     lastResult: null,
@@ -73,6 +76,8 @@
       ui.convertManualBtn.disabled = busy || state.manualSelectedFileIds.size === 0;
     }
     if (ui.localUploadBtn) ui.localUploadBtn.disabled = busy;
+    if (ui.jxlRefreshBtn) ui.jxlRefreshBtn.disabled = busy;
+    if (ui.jxlConvertBtn) ui.jxlConvertBtn.disabled = busy || !state.selectedJxlSource;
     if (ui.projectUploadBtn) ui.projectUploadBtn.disabled = busy || !canOpenProjectUpload();
   }
 
@@ -182,7 +187,12 @@
     titleCard.appendChild(el("div", "card-header", [
       el("h2", null, CONFIG.APP_TITLE)
     ]));
-    titleCard.appendChild(el("div", "subtitle", "Konverter .kof til TXT/XML, .sos/.sosi til LandXML og .gml/.jxl til IFC"));
+    titleCard.appendChild(el("div", "subtitle", "Konverter .kof til TXT/XML, .sos/.sosi til LandXML, .gml til IFC og .jxl manuelt til IFC"));
+
+    const tabsCard = el("div", "card tabs-card");
+    const converterTabBtn = el("button", "primary", "Konvertering");
+    const jxlTabBtn = el("button", null, "JXL til IFC");
+    tabsCard.appendChild(el("div", "btn-row", [converterTabBtn, jxlTabBtn]));
 
     const projectCard = el("div", "card");
     projectCard.appendChild(el("div", "label", "Prosjekt"));
@@ -192,7 +202,7 @@
     const filesCard = el("div", "card");
     const filesHeader = el("div", "card-header", [
       el("div", null, [
-        el("div", "label", "KOF/SOSI/GML/JXL-filer")
+        el("div", "label", "KOF/SOSI/GML-filer")
       ])
     ]);
     const fileCount = el("div", "file-count", "");
@@ -223,6 +233,27 @@
     const fileList = el("div", "file-list");
     fileList.id = "fileList";
     filesCard.appendChild(fileList);
+
+    const jxlCard = el("div", "card");
+    jxlCard.style.display = "none";
+    const jxlHeader = el("div", "card-header", [
+      el("div", null, [
+        el("div", "label", "JXL til IFC"),
+        el("div", "subtitle", "Lister JXL fra Connect Explorer og Field Data. Konvertering skjer manuelt.")
+      ])
+    ]);
+    const jxlCount = el("div", "file-count", "");
+    jxlHeader.appendChild(jxlCount);
+    jxlCard.appendChild(jxlHeader);
+    const jxlBtnRow = el("div", "btn-row");
+    const jxlRefreshBtn = el("button", "primary", "Oppdater JXL-liste");
+    const jxlConvertBtn = el("button", null, "Konverter valgt JXL");
+    jxlConvertBtn.disabled = true;
+    jxlBtnRow.appendChild(jxlRefreshBtn);
+    jxlBtnRow.appendChild(jxlConvertBtn);
+    jxlCard.appendChild(jxlBtnRow);
+    const jxlList = el("div", "file-list");
+    jxlCard.appendChild(jxlList);
 
     const explorerCard = el("div", "card embed-card");
     explorerCard.style.display = "none";
@@ -260,14 +291,18 @@
     debugDetails.appendChild(debugOutput);
 
     app.appendChild(titleCard);
+    app.appendChild(tabsCard);
     app.appendChild(projectCard);
     app.appendChild(statusCard);
     app.appendChild(filesCard);
+    app.appendChild(jxlCard);
     app.appendChild(explorerCard);
     app.appendChild(debugDetails);
 
     ui = {
       projectValue,
+      converterTabBtn,
+      jxlTabBtn,
       fileCount,
       refreshBtn,
       stopBtn,
@@ -276,6 +311,12 @@
       projectUploadBtn,
       localFileInput,
       fileList,
+      jxlCard,
+      jxlCount,
+      jxlRefreshBtn,
+      jxlConvertBtn,
+      jxlList,
+      filesCard,
       explorerCard,
       closeExplorerBtn,
       explorerTarget,
@@ -307,7 +348,7 @@
       : "";
 
     if (!state.fileList.length) {
-      const empty = el("div", "empty-state", "Trykk \"Oppdater liste\" for å hente KOF/SOSI/GML/JXL-filer fra prosjektet.");
+      const empty = el("div", "empty-state", "Trykk \"Oppdater liste\" for å hente KOF/SOSI/GML-filer fra prosjektet.");
       ui.fileList.appendChild(empty);
       return;
     }
@@ -345,6 +386,59 @@
       row.appendChild(statusBadge);
       ui.fileList.appendChild(row);
     }
+  }
+
+  function switchView(view) {
+    state.activeView = view === "jxl" ? "jxl" : "converter";
+    if (ui.filesCard) ui.filesCard.style.display = state.activeView === "converter" ? "" : "none";
+    if (ui.jxlCard) ui.jxlCard.style.display = state.activeView === "jxl" ? "" : "none";
+    if (ui.converterTabBtn) ui.converterTabBtn.className = state.activeView === "converter" ? "primary" : "";
+    if (ui.jxlTabBtn) ui.jxlTabBtn.className = state.activeView === "jxl" ? "primary" : "";
+    setBusy(state.busy);
+  }
+
+  function renderJxlList() {
+    if (!ui.jxlList) return;
+    ui.jxlList.innerHTML = "";
+    ui.jxlCount.textContent = state.jxlSources.length
+      ? `${state.jxlSources.length} JXL-kilde${state.jxlSources.length === 1 ? "" : "r"}`
+      : "";
+
+    if (!state.jxlSources.length) {
+      ui.jxlList.appendChild(el("div", "empty-state", "Trykk \"Oppdater JXL-liste\" for å hente JXL fra Connect Explorer og Field Data."));
+      setBusy(state.busy);
+      return;
+    }
+
+    for (const source of state.jxlSources) {
+      const isSelected = state.selectedJxlSource?.id === source.id && state.selectedJxlSource?.sourceType === source.sourceType;
+      const row = el("label", `file-item pending${isSelected ? " selected" : ""}`);
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "jxlSource";
+      radio.value = `${source.sourceType}:${source.id}`;
+      radio.checked = isSelected;
+      radio.addEventListener("change", () => {
+        state.selectedJxlSource = source;
+        renderJxlList();
+      });
+
+      const info = el("div", "file-info");
+      info.appendChild(el("div", "file-name", source.name || "(uten navn)"));
+      const meta = [
+        source.sourceType === "field-data" ? "Field Data" : "Connect Explorer",
+        source.path || "",
+        source.modifiedOn || ""
+      ].filter(Boolean).join(" · ");
+      if (meta) info.appendChild(el("div", "file-meta", meta));
+      const badge = el("span", "file-status pending", source.sourceType === "field-data" ? "Field Data" : "Fil");
+
+      row.appendChild(radio);
+      row.appendChild(info);
+      row.appendChild(badge);
+      ui.jxlList.appendChild(row);
+    }
+    setBusy(state.busy);
   }
 
   function showHint(message, show = true) {
@@ -2374,7 +2468,7 @@
       setBusy(true);
       showHint(null, false);
       await ensureReady();
-      setStatus("Henter KOF/SOSI/GML/JXL-filer fra prosjektet...", "working");
+      setStatus("Henter KOF/SOSI/GML-filer fra prosjektet...", "working");
 
       const proxyRes = await callProxy("listProjectKofFiles", {
         token: state.accessToken,
@@ -2405,14 +2499,14 @@
       renderFileList();
 
       if (state.fileList.length === 0) {
-        setStatus("Ingen KOF/SOSI/GML/JXL-filer funnet i prosjektet", "neutral");
+        setStatus("Ingen KOF/SOSI/GML-filer funnet i prosjektet", "neutral");
       } else {
         const pendingCount = getPendingKofFiles().length;
         const convertedCount = state.fileList.length - pendingCount;
         const suffix = convertedCount
           ? `, ${pendingCount} mangler konvertering`
           : "";
-        setStatus(`Fant ${state.fileList.length} KOF/SOSI/GML/JXL-fil${state.fileList.length === 1 ? "" : "er"}${suffix}`, "success");
+        setStatus(`Fant ${state.fileList.length} KOF/SOSI/GML-fil${state.fileList.length === 1 ? "" : "er"}${suffix}`, "success");
       }
 
       const pendingFiles = getPendingKofFiles();
@@ -2469,7 +2563,7 @@
 
     state.autoConvertInProgress = true;
     try {
-      setStatus(`Starter automatisk konvertering av ${pendingFiles.length} KOF/SOSI/GML/JXL-fil${pendingFiles.length === 1 ? "" : "er"}...`, "working");
+      setStatus(`Starter automatisk konvertering av ${pendingFiles.length} KOF/SOSI/GML-fil${pendingFiles.length === 1 ? "" : "er"}...`, "working");
       await processAllFiles({ source: "auto-open", files: pendingFiles });
     } finally {
       state.autoConvertInProgress = false;
@@ -2558,10 +2652,179 @@
   async function processManualSelectedFiles() {
     const selectedFiles = state.fileList.filter((file) => state.manualSelectedFileIds.has(file.id));
     if (!selectedFiles.length) {
-      setStatus("Velg minst en KOF/SOSI/GML/JXL-fil først", "error");
+      setStatus("Velg minst en KOF/SOSI/GML-fil først", "error");
       return;
     }
     await processAllFiles({ source: "manual-selected", files: selectedFiles, skipExisting: false });
+  }
+
+  async function refreshJxlSources() {
+    try {
+      setBusy(true);
+      showHint(null, false);
+      await ensureReady();
+      setStatus("Henter JXL fra Connect Explorer og Field Data...", "working");
+
+      const proxyRes = await callProxy("listJxlSources", {
+        token: state.accessToken,
+        projectId: state.project.id,
+        projectLocation: state.project.location
+      });
+
+      if (!proxyRes.ok || !proxyRes.json) {
+        setStatus(`Feil: Proxy svarte med HTTP ${proxyRes.status}`, "error");
+        setDebug({ action: "listJxlSources", status: proxyRes.status, preview: shortText(proxyRes.text, 1500) });
+        return;
+      }
+
+      const result = proxyRes.json;
+      state.jxlSources = Array.isArray(result.sources) ? result.sources : [];
+      state.selectedJxlSource = state.jxlSources[0] || null;
+      renderJxlList();
+
+      if (state.jxlSources.length) {
+        setStatus(`Fant ${state.jxlSources.length} JXL-kilde${state.jxlSources.length === 1 ? "" : "r"}`, "success");
+      } else {
+        setStatus("Fant ingen JXL-kilder i Connect Explorer eller Field Data", "neutral");
+      }
+      setDebug(result);
+    } catch (err) {
+      console.error(err);
+      setStatus(`Feil: ${err?.message || String(err)}`, "error");
+      setDebug({ action: "refreshJxlSources", error: err?.message || String(err), stack: err?.stack });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function processSelectedJxlSource() {
+    const source = state.selectedJxlSource;
+    if (!source) {
+      setStatus("Velg en JXL-kilde først", "error");
+      return;
+    }
+
+    if (source.sourceType === "connect-file") {
+      await processConnectJxlSource(source);
+      return;
+    }
+
+    await processFieldDataJxl(source.job?.name || source.name || "JXL", source.job?.id || source.id);
+  }
+
+  async function processConnectJxlSource(source) {
+    try {
+      setBusy(true);
+      showHint(null, false);
+      await ensureReady();
+      const file = source.file || source;
+      setStatus(`Konverterer JXL-fil: ${file.name}...`, "working");
+      const converted = await downloadAndConvertFile(file);
+      const uploadResult = await uploadConvertedTxtToProject({
+        sourceFile: converted.result.file,
+        outName: converted.outName,
+        txt: converted.text
+      });
+
+      state.lastResult = converted.result;
+      state.lastDownloadName = converted.outName;
+      state.lastUploadResult = uploadResult;
+      if (uploadResult.ok) {
+        setStatus(`Ferdig: ${converted.outName} er lastet opp til prosjektet`, "success");
+        showHint(buildConversionHint(converted, uploadResult));
+      } else {
+        triggerDownload(converted.outName, converted.text);
+        setStatus(`Ferdig: ${converted.outName} er lastet ned lokalt`, "success");
+        showHint(buildConversionHint(converted, uploadResult));
+      }
+      setDebug({ action: "processConnectJxlSource", source, convertedFile: { name: converted.outName, stats: converted.stats || null }, uploadResult });
+    } catch (err) {
+      console.error(err);
+      setStatus(`Feil: ${err?.message || String(err)}`, "error");
+      setDebug({ action: "processConnectJxlSource", error: err?.message || String(err), stack: err?.stack });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function processFieldDataJxl(jobName = "JXL to IFC", jobTrn = null) {
+    try {
+      setBusy(true);
+      showHint(null, false);
+      await ensureReady();
+
+      setStatus(`Søker Field Data etter "${jobName}"...`, "working");
+      const proxyRes = await callProxy("getFieldDataJxl", {
+        token: state.accessToken,
+        projectId: state.project.id,
+        projectLocation: state.project.location,
+        jobName,
+        jobTrn
+      });
+
+      if (!proxyRes.ok || !proxyRes.json) {
+        setStatus(`Feil: Proxy svarte med HTTP ${proxyRes.status}`, "error");
+        setDebug({ action: "getFieldDataJxl", status: proxyRes.status, preview: shortText(proxyRes.text, 1500) });
+        return;
+      }
+
+      const result = proxyRes.json;
+      if (!result.ok) {
+        setStatus(result.error || "Fant ikke Field Data JXL", "error");
+        setDebug(result);
+        return;
+      }
+
+      const jxlName = result.jxlFile?.fileName || `${jobName}.jxl`;
+      setStatus(`Konverterer Field Data JXL: ${jxlName}...`, "working");
+      const converted = convertKofFile(result.text || "", jxlName);
+      const outName = getIfcFilename(jxlName);
+      state.lastDownloadName = outName;
+
+      const sourceFile = {
+        id: result.jxlFile?.id || result.job?.id || "field-data-jxl",
+        name: jxlName,
+        parentId: result.uploadParentId || null,
+        path: "Field Data"
+      };
+      state.lastResult = { file: sourceFile, text: result.text || "" };
+
+      let uploadResult = { ok: false, skipped: true, error: "Fant ikke prosjektmappe for automatisk opplasting." };
+      if (result.uploadParentId) {
+        uploadResult = await uploadConvertedTxtToProject({
+          sourceFile,
+          outName,
+          txt: converted.text
+        });
+      }
+      state.lastUploadResult = uploadResult;
+
+      if (uploadResult.ok) {
+        setStatus(`Ferdig: ${outName} er lastet opp til prosjektet`, "success");
+        showHint(buildConversionHint({ ...converted, outName }, uploadResult));
+      } else {
+        triggerDownload(outName, converted.text);
+        setStatus(`Ferdig: ${outName} er lastet ned lokalt`, "success");
+        showHint(buildConversionHint({ ...converted, outName }, uploadResult));
+      }
+
+      setDebug({
+        action: "processFieldDataJxl",
+        job: result.job,
+        jxlFile: result.jxlFile,
+        uploadParentId: result.uploadParentId,
+        uploadParentSource: result.uploadParentSource,
+        convertedFile: { name: outName, format: converted.format, size: converted.text.length, stats: converted.stats || null },
+        uploadResult,
+        diagnostics: result.diagnostics
+      });
+    } catch (err) {
+      console.error(err);
+      setStatus(`Feil: ${err?.message || String(err)}`, "error");
+      setDebug({ action: "processFieldDataJxl", error: err?.message || String(err), stack: err?.stack });
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function processAllFiles(options = {}) {
@@ -2582,7 +2845,7 @@
       const skippedCount = candidateFiles.length - filesToProcess.length;
 
       if (!filesToProcess.length) {
-        setStatus("Alle KOF/SOSI/GML/JXL-filer har allerede en konvertert fil i samme mappe", "success");
+        setStatus("Alle KOF/SOSI/GML-filer har allerede en konvertert fil i samme mappe", "success");
         showHint("Ingen filer ble konvertert pÃ¥ nytt. Slett eksisterende TXT/XML/IFC i Trimble Connect hvis du vil tvinge en ny konvertering.");
         setDebug({
           action: options.source === "auto-open" ? "autoConvertAllOnOpen" : "convertAll",
@@ -2673,7 +2936,7 @@
           setStatus(`Ferdig! ${okCount} fil${okCount === 1 ? "" : "er"} konvertert og lastet opp${skippedCount ? ` (${skippedCount} hoppet over)` : ""}`, "success");
           showHint(
             skippedCount
-              ? `Alle nye filer ble lastet opp. ${skippedCount} KOF/SOSI/GML/JXL-fil${skippedCount === 1 ? "" : "er"} hadde allerede TXT/XML/IFC i samme mappe og ble ikke konvertert pÃ¥ nytt.`
+              ? `Alle nye filer ble lastet opp. ${skippedCount} KOF/SOSI/GML-fil${skippedCount === 1 ? "" : "er"} hadde allerede TXT/XML/IFC i samme mappe og ble ikke konvertert pÃ¥ nytt.`
               : "Alle konverterte filer ble automatisk lastet opp tilbake til samme prosjektmapper i Trimble Connect."
           );
         } else {
@@ -2798,9 +3061,16 @@
   }
 
   function wireUi() {
+    ui.converterTabBtn.addEventListener("click", () => switchView("converter"));
+    ui.jxlTabBtn.addEventListener("click", () => {
+      switchView("jxl");
+      if (!state.jxlSources.length) refreshJxlSources().catch(() => {});
+    });
     ui.refreshBtn.addEventListener("click", () => refreshKofListOnOpen("manual-refresh"));
     ui.stopBtn.addEventListener("click", requestStopConversion);
     ui.convertManualBtn.addEventListener("click", processManualSelectedFiles);
+    ui.jxlRefreshBtn.addEventListener("click", refreshJxlSources);
+    ui.jxlConvertBtn.addEventListener("click", processSelectedJxlSource);
     ui.localUploadBtn.addEventListener("click", () => ui.localFileInput.click());
     ui.localFileInput.addEventListener("change", (event) => processLocalFile(event.target.files?.[0]));
     ui.projectUploadBtn.addEventListener("click", openProjectUploadExplorer);
@@ -2812,6 +3082,8 @@
       buildUi();
       wireUi();
       renderFileList();
+      renderJxlList();
+      switchView("converter");
 
       setStatus("Starter...", "working");
       await connectWorkspace();
@@ -2828,6 +3100,9 @@
         refreshKofListOnOpen,
         processSelectedFile,
         processManualSelectedFiles,
+        refreshJxlSources,
+        processSelectedJxlSource,
+        processFieldDataJxl,
         processAllFiles,
         requestStopConversion,
         processLocalFile,
