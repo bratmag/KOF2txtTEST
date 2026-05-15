@@ -1926,7 +1926,8 @@
 
     const objects = [];
     for (const { point, name, coord } of pointRecords) {
-      const code = jxlDirectText(point, "Code") || "SurveyPoint";
+      const code = jxlDirectText(point, "Code");
+      if (!code) continue;
       objects.push({
         id: name,
         type: code,
