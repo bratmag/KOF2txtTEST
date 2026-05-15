@@ -2084,7 +2084,80 @@
         if (north != null && east != null) return [east, north, elevation];
       }
     }
+    const wgs84 = jxlWgs84CoordinateFromXmlBlock(block);
+    if (wgs84) return wgs84;
+    const ecef = jxlEcefCoordinateFromXmlBlock(block);
+    if (ecef) return ecef;
     return null;
+  }
+
+  function jxlWgs84CoordinateFromXmlBlock(block) {
+    for (const wgs of xmlBlockContents(block, "WGS84")) {
+      const lat = firstNumber(xmlFirstText(wgs, "Latitude"));
+      const lon = firstNumber(xmlFirstText(wgs, "Longitude"));
+      const height = firstNumber(xmlFirstText(wgs, "Height")) ?? firstNumber(xmlFirstText(wgs, "Elevation")) ?? 0;
+      if (lat != null && lon != null) return latLonToUtm32(lat, lon, height);
+    }
+    return null;
+  }
+
+  function jxlEcefCoordinateFromXmlBlock(block) {
+    for (const ecef of xmlBlockContents(block, "ECEF")) {
+      const x = firstNumber(xmlFirstText(ecef, "X"));
+      const y = firstNumber(xmlFirstText(ecef, "Y"));
+      const z = firstNumber(xmlFirstText(ecef, "Z"));
+      if (x != null && y != null && z != null) {
+        const llh = ecefToWgs84(x, y, z);
+        return latLonToUtm32(llh.lat, llh.lon, llh.height);
+      }
+    }
+    return null;
+  }
+
+  function ecefToWgs84(x, y, z) {
+    const a = 6378137.0;
+    const e2 = 6.6943799901413165e-3;
+    const b = a * Math.sqrt(1 - e2);
+    const ep2 = (a * a - b * b) / (b * b);
+    const p = Math.sqrt(x * x + y * y);
+    const theta = Math.atan2(z * a, p * b);
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+    const lon = Math.atan2(y, x);
+    const lat = Math.atan2(
+      z + ep2 * b * sinTheta * sinTheta * sinTheta,
+      p - e2 * a * cosTheta * cosTheta * cosTheta
+    );
+    const n = a / Math.sqrt(1 - e2 * Math.sin(lat) * Math.sin(lat));
+    const height = p / Math.cos(lat) - n;
+    return { lat: lat * 180 / Math.PI, lon: lon * 180 / Math.PI, height };
+  }
+
+  function latLonToUtm32(latDeg, lonDeg, height = 0) {
+    const a = 6378137.0;
+    const f = 1 / 298.257223563;
+    const e2 = f * (2 - f);
+    const ep2 = e2 / (1 - e2);
+    const k0 = 0.9996;
+    const lat = latDeg * Math.PI / 180;
+    const lon = lonDeg * Math.PI / 180;
+    const lon0 = 9 * Math.PI / 180;
+    const sinLat = Math.sin(lat);
+    const cosLat = Math.cos(lat);
+    const tanLat = Math.tan(lat);
+    const n = a / Math.sqrt(1 - e2 * sinLat * sinLat);
+    const t = tanLat * tanLat;
+    const c = ep2 * cosLat * cosLat;
+    const aa = cosLat * (lon - lon0);
+    const m = a * (
+      (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256) * lat
+      - (3 * e2 / 8 + 3 * e2 * e2 / 32 + 45 * e2 * e2 * e2 / 1024) * Math.sin(2 * lat)
+      + (15 * e2 * e2 / 256 + 45 * e2 * e2 * e2 / 1024) * Math.sin(4 * lat)
+      - (35 * e2 * e2 * e2 / 3072) * Math.sin(6 * lat)
+    );
+    const east = k0 * n * (aa + (1 - t + c) * aa ** 3 / 6 + (5 - 18 * t + t * t + 72 * c - 58 * ep2) * aa ** 5 / 120) + 500000;
+    const north = k0 * (m + n * tanLat * (aa * aa / 2 + (5 - t + 9 * c + 4 * c * c) * aa ** 4 / 24 + (61 - 58 * t + t * t + 600 * c - 330 * ep2) * aa ** 6 / 720));
+    return [east, north, height || 0];
   }
 
   function jxlFeaturePropsFromXmlBlock(block) {
