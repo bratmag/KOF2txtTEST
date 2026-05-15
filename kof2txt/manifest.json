@@ -2,7 +2,7 @@
   "name": "KOFConverter-TEST",
   "title": "KOFConverter-TEST",
   "icon": "https://testkof2txt.netlify.app/icon.png",
-  "url": "https://testkof2txt.netlify.app/index.html",
+  "url": "https://testkof2txt.netlify.app/index.html?v=20260515-jxl-computed-grid",
   "description": "Convert KOF to TXT or LandXML",
   "enabled": true
 }

@@ -7,6 +7,7 @@
     TOKEN_WAIT_MS: 30000,
     PROXY_URL: "/.netlify/functions/tc-proxy",
     APP_TITLE: "KOFConverter-TEST",
+    APP_BUILD: "20260515-jxl-computed-grid",
     AUTO_CONVERT_ON_OPEN: true,
     IFC_POINT_OBJECT_HEIGHT_M: 1,
     IFC_FALLBACK_LINE_RADIUS_M: 0.05,
@@ -900,6 +901,9 @@
         projectName: state.project?.name || state.project?.id || "Prosjekt",
         coordSys: "EPSG:5972"
       });
+      if ((ifc.stats?.geom || 0) === 0 && /<[^>]*LivePolylineRecord\b/i.test(sourceText)) {
+        throw new Error("JXL ble lest, men ingen IFC-geometri ble laget. Appen kan ha gammel converter-cache eller JXL-parseren mangler punktkobling.");
+      }
       return {
         format: "ifc",
         outName: getIfcFilename(fileName),
@@ -2925,6 +2929,7 @@
         jxlFile: result.jxlFile,
         uploadParentId: result.uploadParentId,
         uploadParentSource: result.uploadParentSource,
+        appBuild: CONFIG.APP_BUILD,
         convertedFile: { name: outName, format: converted.format, size: converted.text.length, stats: converted.stats || null },
         uploadResult,
         diagnostics: result.diagnostics
