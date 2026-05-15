@@ -1,8 +1,8 @@
 {
-  "name": "KOFConverter-TEST",
-  "title": "KOFConverter-TEST",
+  "name": "Geomatikksenter",
+  "title": "Geomatikksenter",
   "icon": "https://testkof2txt.netlify.app/icon.png",
   "url": "https://testkof2txt.netlify.app/index.html?v=20260515-jxl-nn2000-ecef",
-  "description": "Convert KOF to TXT or LandXML",
+  "description": "Konverter KOF/SOSI/GML automatisk og bruk avanserte verktøy for JXL til IFC",
   "enabled": true
 }

@@ -6,7 +6,7 @@
     CONNECT_TIMEOUT_MS: 30000,
     TOKEN_WAIT_MS: 30000,
     PROXY_URL: "/.netlify/functions/tc-proxy",
-    APP_TITLE: "KOFConverter-TEST",
+    APP_TITLE: "Geomatikksenter",
     APP_BUILD: "20260515-jxl-nn2000-ecef",
     JXL_ECEF_NN2000_GEOID_OFFSET_M: 40.3703,
     AUTO_CONVERT_ON_OPEN: true,
@@ -189,11 +189,11 @@
     titleCard.appendChild(el("div", "card-header", [
       el("h2", null, CONFIG.APP_TITLE)
     ]));
-    titleCard.appendChild(el("div", "subtitle", "Konverter .kof til TXT/XML, .sos/.sosi til LandXML, .gml til IFC og .jxl manuelt til IFC"));
+    titleCard.appendChild(el("div", "subtitle", "KOF/SOSI/GML konverteres automatisk. Avanserte verktøy ligger ett klikk unna."));
 
     const tabsCard = el("div", "card tabs-card");
-    const converterTabBtn = el("button", "primary", "Konvertering");
-    const jxlTabBtn = el("button", null, "JXL til IFC");
+    const converterTabBtn = el("button", "primary", "KOF-konvertering");
+    const jxlTabBtn = el("button", null, "Avanserte verktøy");
     tabsCard.appendChild(el("div", "btn-row", [converterTabBtn, jxlTabBtn]));
 
     const projectCard = el("div", "card");
@@ -228,7 +228,6 @@
     btnRow.appendChild(stopBtn);
     btnRow.appendChild(convertManualBtn);
     btnRow.appendChild(localUploadBtn);
-    btnRow.appendChild(projectUploadBtn);
     btnRow.appendChild(localFileInput);
     filesCard.appendChild(btnRow);
 
@@ -240,8 +239,8 @@
     jxlCard.style.display = "none";
     const jxlHeader = el("div", "card-header", [
       el("div", null, [
-        el("div", "label", "JXL til IFC"),
-        el("div", "subtitle", "Lister JXL fra Connect Explorer og Field Data. Konvertering skjer manuelt.")
+        el("div", "label", "Avanserte verktøy"),
+        el("div", "subtitle", "Manuell JXL til IFC fra Connect Explorer og Field Data.")
       ])
     ]);
     const jxlCount = el("div", "file-count", "");
@@ -253,6 +252,7 @@
     jxlConvertBtn.disabled = true;
     jxlBtnRow.appendChild(jxlRefreshBtn);
     jxlBtnRow.appendChild(jxlConvertBtn);
+    jxlBtnRow.appendChild(projectUploadBtn);
     jxlCard.appendChild(jxlBtnRow);
     const jxlList = el("div", "file-list");
     jxlCard.appendChild(jxlList);
