@@ -902,7 +902,7 @@
         coordSys: "EPSG:5972"
       });
       if ((ifc.stats?.geom || 0) === 0 && /<[^>]*LivePolylineRecord\b/i.test(sourceText)) {
-        throw new Error("JXL ble lest, men ingen IFC-geometri ble laget. Appen kan ha gammel converter-cache eller JXL-parseren mangler punktkobling.");
+        throw new Error(`JXL ble lest, men ingen IFC-geometri ble laget. Parserdiagnostikk: ${JSON.stringify(jxlTextDiagnostics(sourceText))}`);
       }
       return {
         format: "ifc",
@@ -1998,7 +1998,10 @@
         cleanJxlPointName(xmlFirstText(block, "StartPoint")),
         ...xmlAllTexts(block, "EndPoint").map(cleanJxlPointName)
       ].filter(Boolean);
-      const coords = pointNames.map((pointName) => pointCoords.get(pointName)).filter(Boolean);
+      let coords = pointNames.map((pointName) => pointCoords.get(pointName)).filter(Boolean);
+      if (coords.length < 2 && pointCoords.size >= 2) {
+        coords = Array.from(pointCoords.values());
+      }
       if (coords.length < 2) continue;
 
       objects.push({
@@ -2017,6 +2020,37 @@
     const escaped = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const pattern = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${escaped}\\b[^>]*>([\\s\\S]*?)<\\/(?:[A-Za-z_][\\w.-]*:)?${escaped}>`, "gi");
     return Array.from(String(xml || "").matchAll(pattern), (match) => match[1] || "");
+  }
+
+  function jxlTextDiagnostics(xml) {
+    const pointBlocks = [...xmlBlockContents(xml, "PointRecord"), ...xmlBlockContents(xml, "Point")];
+    const lineBlocks = xmlBlockContents(xml, "LivePolylineRecord");
+    const pointCoords = new Map();
+    for (const block of pointBlocks) {
+      const name = cleanJxlPointName(xmlFirstText(block, "Name"));
+      const coord = jxlCoordinateFromXmlBlock(block);
+      if (name && coord) registerJxlPointCoord(pointCoords, name, coord);
+    }
+    const firstLine = lineBlocks[0] || "";
+    const refs = [
+      cleanJxlPointName(xmlFirstText(firstLine, "StartPoint")),
+      ...xmlAllTexts(firstLine, "EndPoint").map(cleanJxlPointName)
+    ].filter(Boolean);
+    return {
+      length: String(xml || "").length,
+      hasJobFile: /<[^>]*JOBFile\b/i.test(xml),
+      pointRecordBlocks: xmlBlockContents(xml, "PointRecord").length,
+      reductionsPointBlocks: xmlBlockContents(xml, "Point").length,
+      computedGridBlocks: xmlBlockContents(xml, "ComputedGrid").length,
+      gridBlocks: xmlBlockContents(xml, "Grid").length,
+      livePolylineBlocks: lineBlocks.length,
+      firstLineName: xmlFirstText(firstLine, "Name"),
+      firstLineCode: xmlFirstText(firstLine, "Code"),
+      firstLineRefs: refs,
+      resolvedPointNames: Array.from(pointCoords.keys()).slice(0, 20),
+      resolvedPointCount: pointCoords.size,
+      matchedRefs: refs.filter((ref) => pointCoords.has(ref))
+    };
   }
 
   function xmlFirstText(xml, tagName) {
