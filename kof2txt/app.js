@@ -1970,7 +1970,97 @@
       });
     }
 
+    if (!objects.some((object) => object.geom === "curve" || object.geom === "polygon") && /<[^>]*LivePolylineRecord\b/i.test(xml)) {
+      const fallbackObjects = parseJxlForIfcTextFallback(xml);
+      if (fallbackObjects.length) return fallbackObjects;
+    }
+
     return objects;
+  }
+
+  function parseJxlForIfcTextFallback(xml) {
+    const pointCoords = new Map();
+    for (const block of [...xmlBlockContents(xml, "PointRecord"), ...xmlBlockContents(xml, "Point")]) {
+      if (xmlFirstText(block, "Deleted").toLowerCase() === "true") continue;
+      const name = cleanJxlPointName(xmlFirstText(block, "Name"));
+      const coord = jxlCoordinateFromXmlBlock(block);
+      if (name && coord) registerJxlPointCoord(pointCoords, name, coord);
+    }
+
+    const objects = [];
+    for (const block of xmlBlockContents(xml, "LivePolylineRecord")) {
+      if (xmlFirstText(block, "Deleted").toLowerCase() === "true") continue;
+      const name = xmlFirstText(block, "Name");
+      const code = xmlFirstText(block, "Code");
+      if (!name || !code) continue;
+
+      const pointNames = [
+        cleanJxlPointName(xmlFirstText(block, "StartPoint")),
+        ...xmlAllTexts(block, "EndPoint").map(cleanJxlPointName)
+      ].filter(Boolean);
+      const coords = pointNames.map((pointName) => pointCoords.get(pointName)).filter(Boolean);
+      if (coords.length < 2) continue;
+
+      objects.push({
+        id: name,
+        type: code,
+        coords,
+        props: jxlFeaturePropsFromXmlBlock(block),
+        geom: detectIfcGeometryType(coords),
+        source: "jxl"
+      });
+    }
+    return objects;
+  }
+
+  function xmlBlockContents(xml, tagName) {
+    const escaped = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${escaped}\\b[^>]*>([\\s\\S]*?)<\\/(?:[A-Za-z_][\\w.-]*:)?${escaped}>`, "gi");
+    return Array.from(String(xml || "").matchAll(pattern), (match) => match[1] || "");
+  }
+
+  function xmlFirstText(xml, tagName) {
+    return xmlAllTexts(xml, tagName)[0] || "";
+  }
+
+  function xmlAllTexts(xml, tagName) {
+    const escaped = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${escaped}\\b[^>]*>([\\s\\S]*?)<\\/(?:[A-Za-z_][\\w.-]*:)?${escaped}>`, "gi");
+    return Array.from(String(xml || "").matchAll(pattern), (match) => stripXmlText(match[1] || ""));
+  }
+
+  function stripXmlText(value) {
+    return String(value || "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, "\"")
+      .replace(/&apos;/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function jxlCoordinateFromXmlBlock(block) {
+    for (const gridTag of ["ComputedGrid", "Grid"]) {
+      for (const grid of xmlBlockContents(block, gridTag)) {
+        const north = firstNumber(xmlFirstText(grid, "North"));
+        const east = firstNumber(xmlFirstText(grid, "East"));
+        const elevation = firstNumber(xmlFirstText(grid, "Elevation")) ?? 0;
+        if (north != null && east != null) return [east, north, elevation];
+      }
+    }
+    return null;
+  }
+
+  function jxlFeaturePropsFromXmlBlock(block) {
+    const props = {};
+    for (const attribute of xmlBlockContents(block, "Attribute")) {
+      const name = xmlFirstText(attribute, "Name");
+      const value = xmlFirstText(attribute, "Value");
+      if (name && value) props[name] = value;
+    }
+    return props;
   }
 
   function registerJxlPointCoord(pointCoords, name, coord) {
