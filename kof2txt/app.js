@@ -1907,27 +1907,31 @@
     }
 
     const pointCoords = new Map();
+    const pointRecords = [];
     for (const point of xmlElements(doc, "PointRecord")) {
       if (jxlDirectText(point, "Deleted").toLowerCase() === "true") continue;
-      const name = jxlDirectText(point, "Name");
+      const name = cleanJxlPointName(jxlDirectText(point, "Name"));
       const coord = jxlRecordCoordinate(point);
       if (!name || !coord) continue;
-      pointCoords.set(name, coord);
+      registerJxlPointCoord(pointCoords, name, coord);
+      pointRecords.push({ point, name, coord });
+    }
+
+    for (const point of xmlElements(doc, "Point")) {
+      const name = cleanJxlPointName(jxlDirectText(point, "Name"));
+      const coord = jxlRecordCoordinate(point);
+      if (!name || !coord) continue;
+      registerJxlPointCoord(pointCoords, name, coord);
     }
 
     const objects = [];
-    for (const point of xmlElements(doc, "PointRecord")) {
-      if (jxlDirectText(point, "Deleted").toLowerCase() === "true") continue;
-      const name = jxlDirectText(point, "Name");
-      const code = jxlDirectText(point, "Code");
-      if (!name || !code) continue;
-      const coord = jxlRecordCoordinate(point);
-      if (!coord) continue;
+    for (const { point, name, coord } of pointRecords) {
+      const code = jxlDirectText(point, "Code") || "SurveyPoint";
       objects.push({
         id: name,
         type: code,
         coords: [coord],
-        props: jxlFeatureProps(point),
+        props: jxlSurveyPointProps(point, coord),
         geom: "point",
         source: "jxl"
       });
@@ -1940,7 +1944,7 @@
       if (!name || !code) continue;
 
       const pointNames = [];
-      const start = jxlDirectText(polyline, "StartPoint");
+      const start = jxlPointRefText(firstXmlChild(polyline, "StartPoint"));
       if (start) pointNames.push(start);
       const parts = firstXmlChild(polyline, "Parts");
       for (const endPoint of xmlElements(parts || polyline, "EndPoint")) {
@@ -1948,7 +1952,7 @@
         if (value) pointNames.push(value);
       }
 
-      const coords = pointNames.map((pointName) => pointCoords.get(pointName)).filter(Boolean);
+      const coords = pointNames.map((pointName) => pointCoords.get(cleanJxlPointName(pointName))).filter(Boolean);
       if (coords.length < 2) coords.push(...jxlInlineCoordinates(polyline));
       if (coords.length < 2) continue;
       objects.push({
@@ -1962,6 +1966,28 @@
     }
 
     return objects;
+  }
+
+  function registerJxlPointCoord(pointCoords, name, coord) {
+    const key = cleanJxlPointName(name);
+    if (!key || !coord) return;
+    const existing = pointCoords.get(key);
+    if (!existing || (isZeroCoord(existing) && !isZeroCoord(coord)) || (!isLikelyJxlGridCoord(existing) && isLikelyJxlGridCoord(coord))) {
+      pointCoords.set(key, coord);
+    }
+  }
+
+  function jxlSurveyPointProps(record, coord) {
+    const props = jxlFeatureProps(record);
+    for (const key of ["Name", "Code", "Method", "SurveyMethod", "Classification"]) {
+      const value = jxlDirectText(record, key);
+      if (value) props[key] = value;
+    }
+    props.OriginalX = formatIfcNumber(coord[0]);
+    props.OriginalY = formatIfcNumber(coord[1]);
+    props.OriginalZ = formatIfcNumber(coord[2]);
+    props.CoordinateOrder = "X=East, Y=North, Z=Elevation";
+    return props;
   }
 
   function jxlFeatureProps(record) {
@@ -1980,17 +2006,23 @@
 
   function jxlRecordCoordinate(record) {
     const candidates = [];
+    if (["Grid", "ComputedGrid", "Local", "Coordinate", "Coordinates"].includes(xmlLocalName(record))) {
+      const coord = jxlCoordinateFromElement(record);
+      if (coord) candidates.push(coord);
+    }
     for (const child of Array.from(record?.children || [])) {
       if (["Grid", "ComputedGrid", "Local", "Coordinate", "Coordinates"].includes(xmlLocalName(child))) {
         const coord = jxlCoordinateFromElement(child);
         if (coord) candidates.push(coord);
       }
     }
-    for (const grid of xmlElements(record, "Grid")) {
-      const coord = jxlCoordinateFromElement(grid);
-      if (coord) candidates.push(coord);
+    for (const tagName of ["ComputedGrid", "Grid"]) {
+      for (const grid of xmlElements(record, tagName)) {
+        const coord = jxlCoordinateFromElement(grid);
+        if (coord) candidates.push(coord);
+      }
     }
-    return candidates.find((coord) => !isZeroCoord(coord)) || candidates[0] || null;
+    return candidates.find(isLikelyJxlGridCoord) || candidates.find((coord) => !isZeroCoord(coord)) || candidates[0] || null;
   }
 
   function jxlCoordinateFromElement(element) {
@@ -2010,7 +2042,7 @@
 
   function firstNumberFromXml(root, names) {
     const wanted = new Set(names);
-    for (const node of xmlElements(root, "*")) {
+    for (const node of [root, ...xmlElements(root, "*")]) {
       if (wanted.has(xmlLocalName(node))) {
         const value = parseNumber(node.textContent);
         if (value != null) return value;
@@ -2021,9 +2053,11 @@
 
   function jxlInlineCoordinates(record) {
     const coords = [];
-    for (const element of xmlElements(record, "Grid")) {
-      const coord = jxlCoordinateFromElement(element);
-      if (coord && !coords.some((existing) => sameCoord(existing, coord))) coords.push(coord);
+    for (const tagName of ["ComputedGrid", "Grid"]) {
+      for (const element of xmlElements(record, tagName)) {
+        const coord = jxlCoordinateFromElement(element);
+        if (coord && !coords.some((existing) => sameCoord(existing, coord))) coords.push(coord);
+      }
     }
     return coords;
   }
@@ -2033,7 +2067,19 @@
       const value = jxlDirectText(element, key);
       if (value) return value;
     }
-    return String(element?.textContent || "").trim();
+    return cleanJxlPointName(element?.textContent || "");
+  }
+
+  function cleanJxlPointName(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    return text.split(/\s+/)[0].replace(/^["']|["']$/g, "");
+  }
+
+  function isLikelyJxlGridCoord(coord) {
+    return Array.isArray(coord) &&
+      Math.abs(Number(coord[0]) || 0) > 1000 &&
+      Math.abs(Number(coord[1]) || 0) > 1000;
   }
 
   function isZeroCoord(coord) {
