@@ -7,7 +7,8 @@
     TOKEN_WAIT_MS: 30000,
     PROXY_URL: "/.netlify/functions/tc-proxy",
     APP_TITLE: "KOFConverter-TEST",
-    APP_BUILD: "20260515-jxl-computed-grid",
+    APP_BUILD: "20260515-jxl-nn2000-ecef",
+    JXL_ECEF_NN2000_GEOID_OFFSET_M: 40.3703,
     AUTO_CONVERT_ON_OPEN: true,
     IFC_POINT_OBJECT_HEIGHT_M: 1,
     IFC_FALLBACK_LINE_RADIUS_M: 0.05,
@@ -2096,7 +2097,7 @@
       const lat = firstNumber(xmlFirstText(wgs, "Latitude"));
       const lon = firstNumber(xmlFirstText(wgs, "Longitude"));
       const height = firstNumber(xmlFirstText(wgs, "Height")) ?? firstNumber(xmlFirstText(wgs, "Elevation")) ?? 0;
-      if (lat != null && lon != null) return latLonToUtm32(lat, lon, height);
+      if (lat != null && lon != null) return latLonToUtm32(lat, lon, ellipsoidToNn2000Height(lat, lon, height));
     }
     return null;
   }
@@ -2108,7 +2109,7 @@
       const z = firstNumber(xmlFirstText(ecef, "Z"));
       if (x != null && y != null && z != null) {
         const llh = ecefToWgs84(x, y, z);
-        return latLonToUtm32(llh.lat, llh.lon, llh.height);
+        return latLonToUtm32(llh.lat, llh.lon, ellipsoidToNn2000Height(llh.lat, llh.lon, llh.height));
       }
     }
     return null;
@@ -2131,6 +2132,10 @@
     const n = a / Math.sqrt(1 - e2 * Math.sin(lat) * Math.sin(lat));
     const height = p / Math.cos(lat) - n;
     return { lat: lat * 180 / Math.PI, lon: lon * 180 / Math.PI, height };
+  }
+
+  function ellipsoidToNn2000Height(_latDeg, _lonDeg, ellipsoidHeight) {
+    return (Number(ellipsoidHeight) || 0) - CONFIG.JXL_ECEF_NN2000_GEOID_OFFSET_M;
   }
 
   function latLonToUtm32(latDeg, lonDeg, height = 0) {
