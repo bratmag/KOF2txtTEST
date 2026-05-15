@@ -1910,12 +1910,9 @@
     for (const point of xmlElements(doc, "PointRecord")) {
       if (jxlDirectText(point, "Deleted").toLowerCase() === "true") continue;
       const name = jxlDirectText(point, "Name");
-      const grid = firstXmlChild(point, "Grid");
-      const north = parseNumber(jxlDirectText(grid, "North"));
-      const east = parseNumber(jxlDirectText(grid, "East"));
-      const elevation = parseNumber(jxlDirectText(grid, "Elevation"));
-      if (!name || north == null || east == null || elevation == null) continue;
-      pointCoords.set(name, [east, north, elevation]);
+      const coord = jxlRecordCoordinate(point);
+      if (!name || !coord) continue;
+      pointCoords.set(name, coord);
     }
 
     const objects = [];
@@ -1924,15 +1921,12 @@
       const name = jxlDirectText(point, "Name");
       const code = jxlDirectText(point, "Code");
       if (!name || !code) continue;
-      const grid = firstXmlChild(point, "Grid");
-      const north = parseNumber(jxlDirectText(grid, "North"));
-      const east = parseNumber(jxlDirectText(grid, "East"));
-      const elevation = parseNumber(jxlDirectText(grid, "Elevation"));
-      if (north == null || east == null || elevation == null) continue;
+      const coord = jxlRecordCoordinate(point);
+      if (!coord) continue;
       objects.push({
         id: name,
         type: code,
-        coords: [[east, north, elevation]],
+        coords: [coord],
         props: jxlFeatureProps(point),
         geom: "point",
         source: "jxl"
@@ -1950,11 +1944,12 @@
       if (start) pointNames.push(start);
       const parts = firstXmlChild(polyline, "Parts");
       for (const endPoint of xmlElements(parts || polyline, "EndPoint")) {
-        const value = (endPoint.textContent || "").trim();
+        const value = jxlPointRefText(endPoint);
         if (value) pointNames.push(value);
       }
 
       const coords = pointNames.map((pointName) => pointCoords.get(pointName)).filter(Boolean);
+      if (coords.length < 2) coords.push(...jxlInlineCoordinates(polyline));
       if (coords.length < 2) continue;
       objects.push({
         id: name,
@@ -1983,9 +1978,78 @@
     return props;
   }
 
+  function jxlRecordCoordinate(record) {
+    const candidates = [];
+    for (const child of Array.from(record?.children || [])) {
+      if (["Grid", "ComputedGrid", "Local", "Coordinate", "Coordinates"].includes(xmlLocalName(child))) {
+        const coord = jxlCoordinateFromElement(child);
+        if (coord) candidates.push(coord);
+      }
+    }
+    for (const grid of xmlElements(record, "Grid")) {
+      const coord = jxlCoordinateFromElement(grid);
+      if (coord) candidates.push(coord);
+    }
+    return candidates.find((coord) => !isZeroCoord(coord)) || candidates[0] || null;
+  }
+
+  function jxlCoordinateFromElement(element) {
+    if (!element) return null;
+    const north = firstNumberFromXml(element, ["North", "N", "Y"]);
+    const east = firstNumberFromXml(element, ["East", "E", "X"]);
+    const elevation = firstNumberFromXml(element, ["Elevation", "Elev", "Height", "H", "Z"]) ?? 0;
+    if (north != null && east != null) return [east, north, elevation];
+
+    const nums = String(element.textContent || "").match(/-?\d+(?:[.,]\d+)?/g) || [];
+    if (nums.length >= 2) {
+      const parsed = nums.map((value) => parseNumber(value)).filter((value) => value != null);
+      if (parsed.length >= 2) return [parsed[1], parsed[0], parsed[2] ?? 0];
+    }
+    return null;
+  }
+
+  function firstNumberFromXml(root, names) {
+    const wanted = new Set(names);
+    for (const node of xmlElements(root, "*")) {
+      if (wanted.has(xmlLocalName(node))) {
+        const value = parseNumber(node.textContent);
+        if (value != null) return value;
+      }
+    }
+    return null;
+  }
+
+  function jxlInlineCoordinates(record) {
+    const coords = [];
+    for (const element of xmlElements(record, "Grid")) {
+      const coord = jxlCoordinateFromElement(element);
+      if (coord && !coords.some((existing) => sameCoord(existing, coord))) coords.push(coord);
+    }
+    return coords;
+  }
+
+  function jxlPointRefText(element) {
+    for (const key of ["Point", "PointName", "Name", "EndPoint"]) {
+      const value = jxlDirectText(element, key);
+      if (value) return value;
+    }
+    return String(element?.textContent || "").trim();
+  }
+
+  function isZeroCoord(coord) {
+    return Array.isArray(coord) && coord.every((value) => Math.abs(Number(value) || 0) < 1e-9);
+  }
+
+  function sameCoord(a, b) {
+    return Array.isArray(a) && Array.isArray(b) &&
+      Math.abs((a[0] || 0) - (b[0] || 0)) < 1e-6 &&
+      Math.abs((a[1] || 0) - (b[1] || 0)) < 1e-6 &&
+      Math.abs((a[2] || 0) - (b[2] || 0)) < 1e-6;
+  }
+
   function xmlElements(root, localName) {
     if (!root) return [];
-    return Array.from(root.getElementsByTagName("*")).filter((node) => xmlLocalName(node) === localName);
+    return Array.from(root.getElementsByTagName("*")).filter((node) => localName === "*" || xmlLocalName(node) === localName);
   }
 
   function firstXmlChild(root, localName) {

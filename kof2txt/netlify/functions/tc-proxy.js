@@ -1062,12 +1062,67 @@ async function listProjectJxlFiles({ token, projectId, projectLocation }) {
     preview: shortText(res.text, 500)
   });
 
-  const files = res.ok && res.json
+  const searchFiles = res.ok && res.json
     ? normalizeFilesFromAnyResponse(res.json)
         .filter((file) => file?.id && /\.jxl$/i.test(file.name || ""))
         .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" }))
     : [];
 
+  const seedFolderIds = Array.from(new Set(searchFiles.map((file) => file.parentId).filter(Boolean)));
+  if (seedFolderIds.length) {
+    const folderTree = await tryFolderTreeJxlListing({
+      token,
+      projectLocation,
+      seedFolderIds,
+      initialDiagnostics: diagnostics
+    });
+    return folderTree;
+  }
+
+  const files = searchFiles.filter((file) => !isDeletedFileLike(file));
+  return { ok: files.length > 0, files, diagnostics };
+}
+
+async function tryFolderTreeJxlListing({ token, projectLocation, seedFolderIds = [], initialDiagnostics = [] }) {
+  const base = await getCoreBaseUrlAsync(projectLocation);
+  const diagnostics = Array.isArray(initialDiagnostics) ? [...initialDiagnostics] : [];
+  const filesByKey = new Map();
+  const folderQueue = seedFolderIds.map((id) => ({ id, pathParts: [] }));
+  const visitedFolders = new Set();
+
+  while (folderQueue.length) {
+    const current = folderQueue.shift();
+    if (!current?.id || visitedFolders.has(current.id)) continue;
+    visitedFolders.add(current.id);
+
+    const res = await fetchJsonWithBearer(`${base}/folders/${encodeURIComponent(current.id)}/items`, token);
+    diagnostics.push({
+      name: `jxl-folder-items:${current.id}`,
+      url: `${base}/folders/${encodeURIComponent(current.id)}/items`,
+      ok: res.ok,
+      status: res.status,
+      preview: shortText(res.text, 500)
+    });
+    if (!res.ok || !res.json) continue;
+
+    const items = normalizeItemsFromAnyResponse(res.json, current.pathParts);
+    for (const item of items) {
+      if (item.kind === "folder") {
+        folderQueue.push({
+          id: item.id,
+          pathParts: item.name ? [...current.pathParts, item.name] : current.pathParts
+        });
+        continue;
+      }
+      if (!item.id || !/\.jxl$/i.test(item.name || "") || isDeletedFileLike(item)) continue;
+      const key = `${item.id}|${item.parentId || ""}|${item.name}`;
+      if (!filesByKey.has(key)) filesByKey.set(key, item);
+    }
+  }
+
+  const files = Array.from(filesByKey.values()).sort((a, b) =>
+    String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" })
+  );
   return { ok: files.length > 0, files, diagnostics };
 }
 
@@ -1087,10 +1142,6 @@ async function listFieldDataJxlJobs({ token, projectId }) {
   if (!res.ok || !res.json) return { ok: false, jobs: [], diagnostics };
 
   const jobs = (Array.isArray(res.json.items) ? res.json.items : [])
-    .filter((job) => {
-      const name = `${job?.name || ""} ${job?.rootDataFileJxl?.fileName || ""} ${job?.rootDataFile?.fileName || ""}`;
-      return /\.jxl\b/i.test(name) || job?.rootDataFileJxl || /jxl/i.test(name);
-    })
     .map((job) => ({
       id: job.id || null,
       name: job.name || null,
@@ -1657,16 +1708,29 @@ async function resolveProjectUploadParent({ token, projectId, projectLocation })
 function extractProjectFolderId(payload) {
   if (!payload || typeof payload !== "object") return null;
   const candidates = [
+    payload.rootId,
     payload.rootFolderId,
     payload.rootFolder?.id,
     payload.root?.id,
     payload.folderId,
     payload.folder?.id,
+    payload.data?.rootId,
     payload.data?.rootFolderId,
     payload.data?.rootFolder?.id,
     payload.data?.folderId
   ].filter(Boolean);
   return candidates.length ? String(candidates[0]) : null;
+}
+
+function isDeletedFileLike(file) {
+  const text = [
+    file?.deleted,
+    file?.isDeleted,
+    file?.lifeState,
+    file?.status,
+    file?.state
+  ].filter((value) => value != null).join(" ").toLowerCase();
+  return /\b(deleted|removed|trashed|inactive)\b/.test(text) || file?.deleted === true || file?.isDeleted === true;
 }
 
 function normalizeFoldersFromAnyResponse(payload) {
